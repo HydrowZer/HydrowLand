@@ -8,7 +8,7 @@ interface PeerMessage {
 }
 
 // Configuration du serveur WebSocket de signaling
-const SIGNALING_SERVER = "ws://192.168.1.114:8765";
+const SIGNALING_SERVER = "ws://cabochards.duckdns.org:8765";
 
 // Configuration ICE avec serveurs STUN/TURN publics fiables
 const ICE_SERVERS: RTCIceServer[] = [
