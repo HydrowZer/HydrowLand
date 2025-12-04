@@ -2,15 +2,37 @@ name: Build
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - master
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  create-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create auto tag
+        id: tag
+        run: |
+          # Générer un tag basé sur la date et le numéro de build
+          TAG="v0.1.0-build.${{ github.run_number }}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag $TAG
+          git push origin $TAG
+
   build:
+    needs: create-tag
     strategy:
       fail-fast: false
       matrix:
@@ -61,11 +83,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'HydrowLand v__VERSION__'
-          releaseBody: 'Télécharge le fichier correspondant à ton système.'
-          releaseDraft: true
-          prerelease: false
+          tagName: ${{ needs.create-tag.outputs.tag }}
+          releaseName: 'HydrowLand ${{ needs.create-tag.outputs.tag }}'
+          releaseBody: 'Build automatique. Télécharge le fichier correspondant à ton système.'
+          releaseDraft: false
+          prerelease: true
           args: ${{ matrix.args }}
 
       - name: Upload artifacts
@@ -78,4 +100,4 @@ jobs:
             src-tauri/target/release/bundle/**/*.msi
             src-tauri/target/release/bundle/**/*.AppImage
             src-tauri/target/release/bundle/**/*.deb
-            src-tauri/target/universal-apple-darwin/release/bundle/**/*.dmg
+            src-tauri/target/aarch64-apple-darwin/release/bundle/**/*.dmg
