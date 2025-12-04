@@ -163,6 +163,7 @@ export function ServerView() {
       try {
         const packet = await api.streamingGetOutgoingPacket();
         if (packet && packet.data.length > 0) {
+          console.log("[Audio] Sending packet size:", packet.data.length);
           peerService.broadcast({
             type: "audio",
             payload: {
@@ -323,6 +324,7 @@ export function ServerView() {
           } else if (msg.type === "audio") {
             // Handle incoming audio from peer
             const payload = msg.payload as { data: number[]; timestamp: number };
+            console.log("[Audio] Received from", peerId, "size:", payload.data.length);
             handlePeerAudio(peerId, payload.data);
           } else if (msg.type === "screen") {
             // Handle incoming screen frame from peer

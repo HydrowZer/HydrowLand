@@ -356,11 +356,36 @@ impl AudioStreamingService {
         let device_name = device.name().unwrap_or_default();
         tracing::info!("Starting audio playback on: {}", device_name);
 
-        let config = StreamConfig {
-            channels: CHANNELS,
-            sample_rate: cpal::SampleRate(SAMPLE_RATE),
-            buffer_size: cpal::BufferSize::Fixed(SAMPLES_PER_FRAME as u32),
+        // Use default config first, fall back to our preferred config
+        let config = match device.default_output_config() {
+            Ok(supported) => {
+                let mut config = supported.config();
+                // Try to use mono if possible, otherwise keep device channels
+                if config.channels > 1 {
+                    tracing::info!("Output device uses {} channels", config.channels);
+                }
+                // Use default buffer size (more compatible)
+                config.buffer_size = cpal::BufferSize::Default;
+                config
+            }
+            Err(_) => {
+                // Fallback to our preferred config
+                StreamConfig {
+                    channels: CHANNELS,
+                    sample_rate: cpal::SampleRate(SAMPLE_RATE),
+                    buffer_size: cpal::BufferSize::Default,
+                }
+            }
         };
+
+        let output_channels = config.channels as usize;
+        let output_sample_rate = config.sample_rate.0;
+
+        tracing::info!(
+            "Playback config: {}Hz, {} channels",
+            output_sample_rate,
+            output_channels
+        );
 
         let playback_buffer = self.playback_buffer.clone();
 
@@ -369,8 +394,17 @@ impl AudioStreamingService {
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                 let mut buffer = playback_buffer.lock();
 
-                for sample in data.iter_mut() {
-                    *sample = buffer.pop().unwrap_or(0.0);
+                // Number of frames needed (accounting for channels)
+                let frames_needed = data.len() / output_channels;
+
+                for frame in 0..frames_needed {
+                    // Get mono sample from buffer
+                    let sample = buffer.pop().unwrap_or(0.0);
+
+                    // Duplicate to all output channels
+                    for ch in 0..output_channels {
+                        data[frame * output_channels + ch] = sample;
+                    }
                 }
             },
             |err| {
