@@ -1,4 +1,4 @@
-name: Build
+name: Build & Release
 
 on:
   push:
@@ -73,22 +73,33 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopus-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopus-dev libpipewire-0.3-dev
 
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build Tauri app
+      - name: Build Tauri app with updater
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ needs.create-tag.outputs.tag }}
           releaseName: 'HydrowLand ${{ needs.create-tag.outputs.tag }}'
-          releaseBody: 'Build automatique. Télécharge le fichier correspondant à ton système.'
+          releaseBody: |
+            ## Mise à jour automatique
+
+            Cette version sera automatiquement proposée aux utilisateurs existants.
+
+            ### Téléchargement manuel
+            - **macOS (Apple Silicon)** : `.dmg`
+            - **Windows** : `.msi` ou `.exe`
+            - **Linux** : `.AppImage` ou `.deb`
           releaseDraft: false
-          prerelease: true
+          prerelease: false
           args: ${{ matrix.args }}
+          updaterJsonKeepUniversal: true
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

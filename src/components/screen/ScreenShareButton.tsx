@@ -67,12 +67,13 @@ export function ScreenShareButton({ isSharing, onSharingChange, fps = 30 }: Scre
     <>
       <button
         onClick={handleClick}
+        data-screen-share-button
         className={`p-3 rounded-full transition-colors ${
           isSharing
             ? "bg-green-600 hover:bg-green-700 text-white"
             : "bg-zinc-700 hover:bg-zinc-600 text-zinc-300"
         }`}
-        title={isSharing ? "Stop sharing" : "Share screen"}
+        title={isSharing ? "Stop sharing (S)" : "Share screen (S)"}
       >
         <svg
           className="w-5 h-5"

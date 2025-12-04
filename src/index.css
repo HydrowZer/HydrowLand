@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 :root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   line-height: 1.5;
   font-weight: 400;
   font-synthesis: none;
@@ -12,11 +12,107 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Dark theme (default) - Cursor/Linear style */
+html.dark,
+html:not(.light) {
+  --bg-primary: #09090b;
+  --bg-secondary: #18181b;
+  --bg-tertiary: #27272a;
+  --bg-elevated: #141416;
+  --text-primary: #fafafa;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  --border-color: #27272a;
+  --accent: #9333ea;
+  --accent-hover: #7c3aed;
+}
+
+/* Light theme variables */
+html.light {
+  --bg-primary: #fafafa;
+  --bg-secondary: #f4f4f5;
+  --bg-tertiary: #e4e4e7;
+  --bg-elevated: #ffffff;
+  --text-primary: #09090b;
+  --text-secondary: #52525b;
+  --text-muted: #71717a;
+  --border-color: #e4e4e7;
+  --accent: #9333ea;
+  --accent-hover: #7c3aed;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 #root {
   min-height: 100vh;
+}
+
+/* Custom scrollbar - minimal like Cursor */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}
+
+html.light ::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+}
+
+html.light ::-webkit-scrollbar-thumb:hover {
+  background: #a1a1aa;
+}
+
+/* Light mode overrides */
+html.light .bg-dark-900 { background-color: #fafafa; }
+html.light .bg-dark-850 { background-color: #f4f4f5; }
+html.light .bg-dark-800 { background-color: #ffffff; }
+html.light .bg-dark-700 { background-color: #f4f4f5; }
+html.light .bg-dark-700\/50 { background-color: rgb(244 244 245 / 0.5); }
+html.light .bg-dark-700\/30 { background-color: rgb(244 244 245 / 0.3); }
+html.light .bg-dark-600 { background-color: #e4e4e7; }
+
+html.light .text-white { color: #09090b; }
+html.light .text-dark-400 { color: #71717a; }
+html.light .text-dark-500 { color: #a1a1aa; }
+html.light .text-dark-300 { color: #52525b; }
+
+html.light .border-dark-700 { border-color: #e4e4e7; }
+html.light .border-dark-600 { border-color: #d4d4d8; }
+html.light .border-dark-800 { border-color: #e4e4e7; }
+
+html.light .hover\:bg-dark-700:hover { background-color: #f4f4f5; }
+html.light .hover\:bg-dark-600:hover { background-color: #e4e4e7; }
+html.light .hover\:text-white:hover { color: #09090b; }
+
+html.light .focus\:ring-dark-500:focus { --tw-ring-color: #a1a1aa; }
+
+html.light .placeholder-dark-500::placeholder { color: #a1a1aa; }
+
+/* Focus ring style */
+*:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Selection style */
+::selection {
+  background-color: rgba(147, 51, 234, 0.3);
 }

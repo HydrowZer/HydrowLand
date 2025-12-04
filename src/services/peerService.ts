@@ -5,14 +5,31 @@ export type ConnectionHandler = (peerId: string, username: string) => void;
 export type DisconnectionHandler = (peerId: string) => void;
 
 interface PeerMessage {
-  type: "chat" | "audio" | "announce" | "ping" | "speaking";
+  type: "chat" | "audio" | "announce" | "ping" | "pong" | "speaking";
   payload: unknown;
+}
+
+export interface ConnectionQuality {
+  latency: number; // ms
+  status: "excellent" | "good" | "fair" | "poor" | "disconnected";
 }
 
 class PeerService {
   private peer: Peer | null = null;
   private connections: Map<string, DataConnection> = new Map();
   private username: string = "";
+  private pingTimestamps: Map<string, number> = new Map();
+  private latencies: Map<string, number> = new Map();
+  private pingInterval: ReturnType<typeof setInterval> | null = null;
+
+  // Reconnection state
+  private isHost: boolean = false;
+  private serverCode: string = "";
+  private reconnectAttempts: number = 0;
+  private maxReconnectAttempts: number = 5;
+  private reconnectDelay: number = 2000;
+  private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+  private intentionalDisconnect: boolean = false;
 
   // Callbacks
   private onMessage: MessageHandler | null = null;
@@ -20,6 +37,9 @@ class PeerService {
   private onPeerDisconnected: DisconnectionHandler | null = null;
   private onReady: (() => void) | null = null;
   private onError: ((error: string) => void) | null = null;
+  private onLatencyUpdate: ((peerId: string, latency: number) => void) | null = null;
+  private onReconnecting: ((attempt: number, maxAttempts: number) => void) | null = null;
+  private onReconnected: (() => void) | null = null;
 
   setCallbacks(callbacks: {
     onMessage?: MessageHandler;
@@ -27,12 +47,18 @@ class PeerService {
     onPeerDisconnected?: DisconnectionHandler;
     onReady?: () => void;
     onError?: (error: string) => void;
+    onLatencyUpdate?: (peerId: string, latency: number) => void;
+    onReconnecting?: (attempt: number, maxAttempts: number) => void;
+    onReconnected?: () => void;
   }) {
     this.onMessage = callbacks.onMessage || null;
     this.onPeerConnected = callbacks.onPeerConnected || null;
     this.onPeerDisconnected = callbacks.onPeerDisconnected || null;
     this.onReady = callbacks.onReady || null;
     this.onError = callbacks.onError || null;
+    this.onLatencyUpdate = callbacks.onLatencyUpdate || null;
+    this.onReconnecting = callbacks.onReconnecting || null;
+    this.onReconnected = callbacks.onReconnected || null;
   }
 
   /**
@@ -40,6 +66,10 @@ class PeerService {
    */
   async host(serverCode: string, username: string): Promise<void> {
     this.username = username;
+    this.serverCode = serverCode;
+    this.isHost = true;
+    this.intentionalDisconnect = false;
+    this.reconnectAttempts = 0;
 
     return new Promise((resolve, reject) => {
       // Créer le peer avec le code serveur comme ID
@@ -49,6 +79,7 @@ class PeerService {
 
       this.peer.on("open", (id) => {
         console.log("Hosting as:", id);
+        this.reconnectAttempts = 0;
         this.onReady?.();
         resolve();
       });
@@ -69,6 +100,7 @@ class PeerService {
 
       this.peer.on("disconnected", () => {
         console.log("Disconnected from signaling server");
+        this.handleDisconnection();
       });
     });
   }
@@ -78,6 +110,10 @@ class PeerService {
    */
   async join(serverCode: string, username: string): Promise<void> {
     this.username = username;
+    this.serverCode = serverCode;
+    this.isHost = false;
+    this.intentionalDisconnect = false;
+    this.reconnectAttempts = 0;
 
     return new Promise((resolve, reject) => {
       // Créer un peer avec un ID aléatoire
@@ -108,6 +144,7 @@ class PeerService {
             payload: { username },
           });
 
+          this.reconnectAttempts = 0;
           this.onPeerConnected?.(hostPeerId, "Host");
           this.onReady?.();
           resolve();
@@ -128,6 +165,11 @@ class PeerService {
           this.onError?.(err.message);
         }
         reject(err);
+      });
+
+      this.peer.on("disconnected", () => {
+        console.log("Disconnected from signaling server");
+        this.handleDisconnection();
       });
 
       // Gérer les connexions entrantes (pour mesh avec autres invités)
@@ -151,14 +193,82 @@ class PeerService {
     });
   }
 
+  /**
+   * Handle unexpected disconnection and attempt reconnection
+   */
+  private handleDisconnection() {
+    if (this.intentionalDisconnect) {
+      console.log("Intentional disconnect, not attempting reconnection");
+      return;
+    }
+
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      console.log("Max reconnection attempts reached");
+      this.onError?.("Connexion perdue. Impossible de se reconnecter après plusieurs tentatives.");
+      return;
+    }
+
+    this.reconnectAttempts++;
+    console.log(`Attempting reconnection (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+    this.onReconnecting?.(this.reconnectAttempts, this.maxReconnectAttempts);
+
+    // Exponential backoff
+    const delay = this.reconnectDelay * Math.pow(1.5, this.reconnectAttempts - 1);
+
+    this.reconnectTimeout = setTimeout(async () => {
+      try {
+        // Clean up old peer
+        if (this.peer && !this.peer.destroyed) {
+          this.peer.destroy();
+        }
+
+        // Attempt to reconnect
+        if (this.isHost) {
+          await this.host(this.serverCode, this.username);
+        } else {
+          await this.join(this.serverCode, this.username);
+        }
+
+        console.log("Reconnection successful!");
+        this.onReconnected?.();
+      } catch (err) {
+        console.error("Reconnection failed:", err);
+        this.handleDisconnection();
+      }
+    }, delay);
+  }
+
+  /**
+   * Cancel any pending reconnection attempts
+   */
+  private cancelReconnection() {
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+    this.reconnectAttempts = 0;
+  }
+
   private setupConnectionHandlers(conn: DataConnection, peerId: string) {
     conn.on("data", (data) => {
       const msg = data as PeerMessage;
-      console.log("Received from", peerId, ":", msg);
 
       if (msg.type === "announce") {
         const payload = msg.payload as { username: string };
         this.onPeerConnected?.(peerId, payload.username);
+      } else if (msg.type === "ping") {
+        // Respond immediately with pong
+        const payload = msg.payload as { timestamp: number };
+        this.sendTo(peerId, { type: "pong", payload: { timestamp: payload.timestamp } });
+      } else if (msg.type === "pong") {
+        // Calculate latency from round-trip time
+        const payload = msg.payload as { timestamp: number };
+        const sentTime = this.pingTimestamps.get(peerId);
+        if (sentTime && payload.timestamp === sentTime) {
+          const latency = Math.round((Date.now() - sentTime) / 2);
+          this.latencies.set(peerId, latency);
+          this.onLatencyUpdate?.(peerId, latency);
+        }
       } else {
         this.onMessage?.(peerId, msg);
       }
@@ -224,6 +334,82 @@ class PeerService {
   }
 
   /**
+   * Démarrer la mesure de latence périodique
+   */
+  startPingInterval() {
+    if (this.pingInterval) return;
+
+    this.pingInterval = setInterval(() => {
+      this.pingAllPeers();
+    }, 3000); // Ping every 3 seconds
+
+    // Ping immediately
+    this.pingAllPeers();
+  }
+
+  /**
+   * Arrêter la mesure de latence
+   */
+  stopPingInterval() {
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
+  }
+
+  /**
+   * Ping tous les peers connectés
+   */
+  private pingAllPeers() {
+    const timestamp = Date.now();
+    this.connections.forEach((conn, peerId) => {
+      if (conn.open) {
+        this.pingTimestamps.set(peerId, timestamp);
+        this.sendTo(peerId, { type: "ping", payload: { timestamp } });
+      }
+    });
+  }
+
+  /**
+   * Obtenir la latence d'un peer
+   */
+  getLatency(peerId: string): number | null {
+    return this.latencies.get(peerId) ?? null;
+  }
+
+  /**
+   * Obtenir la latence moyenne
+   */
+  getAverageLatency(): number | null {
+    if (this.latencies.size === 0) return null;
+    const total = Array.from(this.latencies.values()).reduce((a, b) => a + b, 0);
+    return Math.round(total / this.latencies.size);
+  }
+
+  /**
+   * Obtenir la qualité de connexion basée sur la latence
+   */
+  getConnectionQuality(): ConnectionQuality {
+    const latency = this.getAverageLatency();
+    if (latency === null || this.connections.size === 0) {
+      return { latency: 0, status: "disconnected" };
+    }
+
+    let status: ConnectionQuality["status"];
+    if (latency < 50) {
+      status = "excellent";
+    } else if (latency < 100) {
+      status = "good";
+    } else if (latency < 200) {
+      status = "fair";
+    } else {
+      status = "poor";
+    }
+
+    return { latency, status };
+  }
+
+  /**
    * Obtenir le nombre de peers connectés
    */
   getPeerCount(): number {
@@ -245,9 +431,17 @@ class PeerService {
   }
 
   /**
-   * Se déconnecter
+   * Se déconnecter (intentionnellement)
    */
   disconnect() {
+    // Mark as intentional to prevent auto-reconnection
+    this.intentionalDisconnect = true;
+    this.cancelReconnection();
+
+    this.stopPingInterval();
+    this.latencies.clear();
+    this.pingTimestamps.clear();
+
     this.connections.forEach((conn) => {
       conn.close();
     });
@@ -257,6 +451,10 @@ class PeerService {
       this.peer.destroy();
       this.peer = null;
     }
+
+    // Reset state
+    this.serverCode = "";
+    this.isHost = false;
   }
 }
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, forwardRef, useImperativeHandle } from "react";
 import { listen } from "@tauri-apps/api/event";
 import * as api from "../../services/tauriApi";
 import { AudioLevelMeter } from "./AudioLevelMeter";
@@ -15,7 +15,15 @@ interface VoiceControlsProps {
   isConnected: boolean;
 }
 
-export function VoiceControls({ isConnected }: VoiceControlsProps) {
+export interface VoiceControlsRef {
+  toggleMute: () => void;
+  toggleScreenShare: () => void;
+  isMuted: boolean;
+  isScreenSharing: boolean;
+}
+
+export const VoiceControls = forwardRef<VoiceControlsRef, VoiceControlsProps>(
+  function VoiceControls({ isConnected }, ref) {
   const [isMuted, setIsMuted] = useState(true);
   const [isVoiceActive, setIsVoiceActive] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
@@ -29,8 +37,25 @@ export function VoiceControls({ isConnected }: VoiceControlsProps) {
   const [selectedOutputDevice, setSelectedOutputDevice] = useState<string>("");
   const [noiseSuppressionEnabled, setNoiseSuppressionEnabled] = useState(true);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
-  // Note: screenShareSource will be used in Phase 8 for WebRTC video track
   const [_screenShareSource, setScreenShareSource] = useState<CaptureSourceInfo | null>(null);
+
+  // Expose methods via ref for keyboard shortcuts
+  useImperativeHandle(ref, () => ({
+    toggleMute: () => {
+      if (isConnected) {
+        toggleMute();
+      }
+    },
+    toggleScreenShare: () => {
+      if (isConnected) {
+        // Simulate click on screen share button
+        const btn = document.querySelector('[data-screen-share-button]') as HTMLButtonElement;
+        btn?.click();
+      }
+    },
+    isMuted,
+    isScreenSharing,
+  }));
 
   // Initialize audio on mount
   useEffect(() => {
@@ -192,7 +217,7 @@ export function VoiceControls({ isConnected }: VoiceControlsProps) {
               ? "bg-red-600 hover:bg-red-700 text-white"
               : "bg-green-600 hover:bg-green-700 text-white"
           }`}
-          title={isMuted ? "Activer le micro" : "Couper le micro"}
+          title={isMuted ? "Activer le micro (M)" : "Couper le micro (M)"}
         >
           {/* Speaking indicator ring */}
           {!isMuted && isSpeaking && (
@@ -388,4 +413,4 @@ export function VoiceControls({ isConnected }: VoiceControlsProps) {
       )}
     </div>
   );
-}
+});
