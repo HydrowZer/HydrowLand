@@ -35,14 +35,24 @@ const ICE_SERVERS: RTCIceServer[] = [
   },
 ];
 
-// Configuration PeerJS commune
-const PEER_CONFIG = {
-  debug: 1,
-  config: {
-    iceServers: ICE_SERVERS,
-    iceCandidatePoolSize: 10,
-  },
-};
+// Liste des serveurs PeerJS à essayer (avec fallback)
+interface PeerServerConfig {
+  host: string;
+  port: number;
+  path: string;
+  secure: boolean;
+}
+
+const PEER_SERVERS: PeerServerConfig[] = [
+  // peerjs.92k.de est actuellement plus stable que le serveur officiel
+  { host: "peerjs.92k.de", port: 443, path: "/", secure: true },
+  // Serveur PeerJS officiel (backup - parfois instable)
+  { host: "0.peerjs.com", port: 443, path: "/", secure: true },
+  // Autre serveur alternatif
+  { host: "peer.herokuapp.com", port: 443, path: "/", secure: true },
+];
+
+// Index du serveur actuel (géré par la classe PeerService)
 
 export interface ConnectionQuality {
   latency: number; // ms
@@ -65,6 +75,8 @@ class PeerService {
   private reconnectDelay: number = 2000;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   private intentionalDisconnect: boolean = false;
+  private currentServerIndex: number = 0;
+  private isReconnecting: boolean = false;
 
   // Callbacks
   private onMessage: MessageHandler | null = null;
@@ -97,6 +109,34 @@ class PeerService {
   }
 
   /**
+   * Get PeerJS config for current server
+   */
+  private getPeerConfig() {
+    const server = PEER_SERVERS[this.currentServerIndex];
+    return {
+      debug: 1,
+      host: server.host,
+      port: server.port,
+      path: server.path,
+      secure: server.secure,
+      config: {
+        iceServers: ICE_SERVERS,
+        iceCandidatePoolSize: 10,
+      },
+    };
+  }
+
+  /**
+   * Try the next PeerJS server in the list
+   * @returns true if there are more servers to try, false if we've cycled through all
+   */
+  private tryNextServer(): boolean {
+    this.currentServerIndex = (this.currentServerIndex + 1) % PEER_SERVERS.length;
+    console.log(`[PeerJS] Trying server: ${PEER_SERVERS[this.currentServerIndex].host}`);
+    return this.currentServerIndex !== 0;
+  }
+
+  /**
    * Héberger un serveur avec un code donné
    */
   async host(serverCode: string, username: string): Promise<void> {
@@ -104,15 +144,48 @@ class PeerService {
     this.serverCode = serverCode;
     this.isHost = true;
     this.intentionalDisconnect = false;
-    this.reconnectAttempts = 0;
+    // Only reset server index on fresh connection (not reconnection)
+    if (!this.isReconnecting) {
+      this.currentServerIndex = 0;
+      this.reconnectAttempts = 0;
+    }
 
     return new Promise((resolve, reject) => {
+      let connectionTimeout: ReturnType<typeof setTimeout> | null = null;
+      let resolved = false;
+
+      const cleanup = () => {
+        if (connectionTimeout) {
+          clearTimeout(connectionTimeout);
+          connectionTimeout = null;
+        }
+      };
+
+      // Timeout si la connexion au serveur de signaling prend trop de temps (10 secondes)
+      connectionTimeout = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          console.error("[PeerJS] Host connection timeout after 10s");
+          this.onError?.("Timeout de connexion au serveur de signaling.");
+          reject(new Error("Connection timeout"));
+        }
+      }, 10000);
+
       // Créer le peer avec le code serveur comme ID
-      this.peer = new Peer(`hydrow-${serverCode}`, PEER_CONFIG);
+      const config = this.getPeerConfig();
+      console.log(`[PeerJS] Hosting: connecting to signaling server ${config.host}...`);
+      this.peer = new Peer(`hydrow-${serverCode}`, config);
 
       this.peer.on("open", (id) => {
-        console.log("Hosting as:", id);
+        if (resolved) return;
+        resolved = true;
+        cleanup();
+
+        console.log("[PeerJS] Hosting as:", id);
+        // Connection successful - reset reconnection state
         this.reconnectAttempts = 0;
+        this.isReconnecting = false;
+        this.currentServerIndex = 0;
         this.onReady?.();
         resolve();
       });
@@ -122,9 +195,17 @@ class PeerService {
       });
 
       this.peer.on("error", (err) => {
-        console.error("Peer error:", err);
+        if (resolved) return;
+        resolved = true;
+        cleanup();
+
+        console.error("[PeerJS] Host peer error:", err.type, err.message);
         if (err.type === "unavailable-id") {
           this.onError?.("Ce code serveur est déjà utilisé. Réessaie dans quelques minutes.");
+        } else if (err.type === "network") {
+          this.onError?.("Erreur réseau. Vérifie ta connexion internet.");
+        } else if (err.type === "server-error") {
+          this.onError?.("Le serveur de signaling ne répond pas. Réessaye dans quelques instants.");
         } else {
           this.onError?.(err.message);
         }
@@ -132,8 +213,10 @@ class PeerService {
       });
 
       this.peer.on("disconnected", () => {
-        console.log("Disconnected from signaling server");
-        this.handleDisconnection();
+        console.log("[PeerJS] Host disconnected from signaling server");
+        if (!resolved) {
+          this.handleDisconnection();
+        }
       });
     });
   }
@@ -146,18 +229,44 @@ class PeerService {
     this.serverCode = serverCode;
     this.isHost = false;
     this.intentionalDisconnect = false;
-    this.reconnectAttempts = 0;
+    // Only reset server index on fresh connection (not reconnection)
+    if (!this.isReconnecting) {
+      this.currentServerIndex = 0;
+      this.reconnectAttempts = 0;
+    }
 
     return new Promise((resolve, reject) => {
+      let connectionTimeout: ReturnType<typeof setTimeout> | null = null;
+      let resolved = false;
+
+      const cleanup = () => {
+        if (connectionTimeout) {
+          clearTimeout(connectionTimeout);
+          connectionTimeout = null;
+        }
+      };
+
+      // Timeout si la connexion prend trop de temps (15 secondes)
+      connectionTimeout = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          console.error("[PeerJS] Connection timeout after 15s");
+          this.onError?.("Timeout de connexion. Le serveur ne répond pas.");
+          reject(new Error("Connection timeout"));
+        }
+      }, 15000);
+
       // Créer un peer avec un ID aléatoire
-      this.peer = new Peer(PEER_CONFIG);
+      const config = this.getPeerConfig();
+      console.log(`[PeerJS] Connecting to signaling server ${config.host}...`);
+      this.peer = new Peer(config);
 
       this.peer.on("open", (id) => {
-        console.log("My peer ID:", id);
+        console.log("[PeerJS] Connected to signaling server, my peer ID:", id);
 
         // Se connecter à l'hôte
         const hostPeerId = `hydrow-${serverCode}`;
-        console.log("Connecting to host:", hostPeerId);
+        console.log("[PeerJS] Attempting to connect to host:", hostPeerId);
 
         const conn = this.peer!.connect(hostPeerId, {
           reliable: true,
@@ -165,7 +274,11 @@ class PeerService {
         });
 
         conn.on("open", () => {
-          console.log("Connected to host!");
+          if (resolved) return;
+          resolved = true;
+          cleanup();
+
+          console.log("[PeerJS] Connected to host!");
           this.connections.set(hostPeerId, conn);
           this.setupConnectionHandlers(conn, hostPeerId);
 
@@ -175,23 +288,38 @@ class PeerService {
             payload: { username },
           });
 
+          // Connection successful - reset reconnection state
           this.reconnectAttempts = 0;
+          this.isReconnecting = false;
+          this.currentServerIndex = 0;
           this.onPeerConnected?.(hostPeerId, "Host");
           this.onReady?.();
           resolve();
         });
 
         conn.on("error", (err) => {
-          console.error("Connection error:", err);
+          if (resolved) return;
+          resolved = true;
+          cleanup();
+
+          console.error("[PeerJS] Connection to host error:", err);
           this.onError?.("Impossible de se connecter. Vérifie le code serveur.");
           reject(err);
         });
       });
 
       this.peer.on("error", (err) => {
-        console.error("Peer error:", err);
+        if (resolved) return;
+        resolved = true;
+        cleanup();
+
+        console.error("[PeerJS] Peer error:", err.type, err.message);
         if (err.type === "peer-unavailable") {
           this.onError?.("Serveur introuvable. Vérifie que l'hôte est en ligne.");
+        } else if (err.type === "network") {
+          this.onError?.("Erreur réseau. Vérifie ta connexion internet.");
+        } else if (err.type === "server-error") {
+          this.onError?.("Le serveur de signaling ne répond pas. Réessaye dans quelques instants.");
         } else {
           this.onError?.(err.message);
         }
@@ -199,8 +327,10 @@ class PeerService {
       });
 
       this.peer.on("disconnected", () => {
-        console.log("Disconnected from signaling server");
-        this.handleDisconnection();
+        console.log("[PeerJS] Disconnected from signaling server");
+        if (!resolved) {
+          this.handleDisconnection();
+        }
       });
 
       // Gérer les connexions entrantes (pour mesh avec autres invités)
@@ -233,18 +363,25 @@ class PeerService {
       return;
     }
 
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.log("Max reconnection attempts reached");
-      this.onError?.("Connexion perdue. Impossible de se reconnecter après plusieurs tentatives.");
+    // Essayer le serveur suivant à chaque tentative
+    const hasMoreServers = this.tryNextServer();
+
+    if (this.reconnectAttempts >= this.maxReconnectAttempts * PEER_SERVERS.length) {
+      console.log("Max reconnection attempts reached on all servers");
+      this.onError?.("Connexion perdue. Impossible de se reconnecter après plusieurs tentatives sur tous les serveurs.");
+      // Reset server index for next time
+      this.currentServerIndex = 0;
       return;
     }
 
     this.reconnectAttempts++;
-    console.log(`Attempting reconnection (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
-    this.onReconnecting?.(this.reconnectAttempts, this.maxReconnectAttempts);
+    this.isReconnecting = true;
+    const serverName = PEER_SERVERS[this.currentServerIndex].host;
+    console.log(`Attempting reconnection (${this.reconnectAttempts}) on server: ${serverName}`);
+    this.onReconnecting?.(this.reconnectAttempts, this.maxReconnectAttempts * PEER_SERVERS.length);
 
-    // Exponential backoff
-    const delay = this.reconnectDelay * Math.pow(1.5, this.reconnectAttempts - 1);
+    // Délai plus court entre les serveurs, plus long si on a fait le tour
+    const delay = hasMoreServers ? 1000 : this.reconnectDelay * Math.pow(1.5, Math.floor(this.reconnectAttempts / PEER_SERVERS.length));
 
     this.reconnectTimeout = setTimeout(async () => {
       try {
@@ -278,6 +415,8 @@ class PeerService {
       this.reconnectTimeout = null;
     }
     this.reconnectAttempts = 0;
+    this.isReconnecting = false;
+    this.currentServerIndex = 0;
   }
 
   private setupConnectionHandlers(conn: DataConnection, peerId: string) {

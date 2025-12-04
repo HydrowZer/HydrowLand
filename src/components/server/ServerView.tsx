@@ -354,6 +354,11 @@ export function ServerView() {
         }
       } catch (e) {
         console.error("Failed to connect:", e);
+        // Si on arrive ici sans que onError ait été appelé, on s'assure que l'UI n'est plus bloquée
+        setIsConnecting(false);
+        if (!error) {
+          setError(e instanceof Error ? e.message : "Échec de la connexion");
+        }
       }
     };
 
@@ -362,7 +367,8 @@ export function ServerView() {
     return () => {
       peerService.disconnect();
     };
-  }, [serverInfo, username, isHost, addMessage, handlePeerAudio, handlePeerScreenFrame, handlePeerScreenState, toast]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverInfo?.code, serverInfo?.is_hosting, username, isHost]);
 
   const handleLeave = async () => {
     peerService.disconnect();
