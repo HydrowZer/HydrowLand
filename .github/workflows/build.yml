@@ -49,18 +49,7 @@ jobs:
 
   build:
     needs: create-tag
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: macos-latest
-            args: "--target aarch64-apple-darwin"
-          - platform: windows-latest
-            args: ""
-          - platform: ubuntu-24.04
-            args: ""
-
-    runs-on: ${{ matrix.platform }}
+    runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -70,26 +59,8 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install Rust (macOS)
-        if: matrix.platform == 'macos-latest'
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin
-
-      - name: Install Rust (other)
-        if: matrix.platform != 'macos-latest'
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install dependencies (macOS)
-        if: matrix.platform == 'macos-latest'
-        run: |
-          brew install opus
-
-      - name: Install dependencies (Ubuntu)
-        if: matrix.platform == 'ubuntu-24.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopus-dev libpipewire-0.3-dev libgbm-dev
 
       - name: Install frontend dependencies
         run: npm ci
@@ -109,22 +80,15 @@ jobs:
             Cette version sera automatiquement proposée aux utilisateurs existants.
 
             ### Téléchargement manuel
-            - **macOS (Apple Silicon)** : `.dmg`
             - **Windows** : `.msi` ou `.exe`
-            - **Linux** : `.AppImage` ou `.deb`
           releaseDraft: false
           prerelease: false
-          args: ${{ matrix.args }}
           updaterJsonKeepUniversal: true
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: hydrowland-${{ matrix.platform }}
+          name: hydrowland-windows
           path: |
-            src-tauri/target/release/bundle/**/*.dmg
             src-tauri/target/release/bundle/**/*.exe
             src-tauri/target/release/bundle/**/*.msi
-            src-tauri/target/release/bundle/**/*.AppImage
-            src-tauri/target/release/bundle/**/*.deb
-            src-tauri/target/aarch64-apple-darwin/release/bundle/**/*.dmg

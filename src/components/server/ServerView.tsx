@@ -341,6 +341,7 @@ export function ServerView() {
         },
         onReconnected: () => {
           toast.success("Reconnecté !");
+          setError(null);
           setIsConnecting(false);
           setIsConnected(true);
         },

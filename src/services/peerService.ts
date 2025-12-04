@@ -1,5 +1,3 @@
-import Peer, { DataConnection } from "peerjs";
-
 export type MessageHandler = (peerId: string, data: unknown) => void;
 export type ConnectionHandler = (peerId: string, username: string) => void;
 export type DisconnectionHandler = (peerId: string) => void;
@@ -9,15 +7,15 @@ interface PeerMessage {
   payload: unknown;
 }
 
+// Configuration du serveur WebSocket de signaling
+const SIGNALING_SERVER = "ws://192.168.1.114:8765";
+
 // Configuration ICE avec serveurs STUN/TURN publics fiables
 const ICE_SERVERS: RTCIceServer[] = [
-  // Google STUN servers (très fiables)
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
   { urls: "stun:stun2.l.google.com:19302" },
-  // Cloudflare STUN
   { urls: "stun:stun.cloudflare.com:3478" },
-  // OpenRelay TURN servers (gratuit, fiable)
   {
     urls: "turn:openrelay.metered.ca:80",
     username: "openrelayproject",
@@ -35,48 +33,41 @@ const ICE_SERVERS: RTCIceServer[] = [
   },
 ];
 
-// Liste des serveurs PeerJS à essayer (avec fallback)
-interface PeerServerConfig {
-  host: string;
-  port: number;
-  path: string;
-  secure: boolean;
-}
-
-const PEER_SERVERS: PeerServerConfig[] = [
-  // peerjs.92k.de est actuellement plus stable que le serveur officiel
-  { host: "peerjs.92k.de", port: 443, path: "/", secure: true },
-  // Serveur PeerJS officiel (backup - parfois instable)
-  { host: "0.peerjs.com", port: 443, path: "/", secure: true },
-  // Autre serveur alternatif
-  { host: "peer.herokuapp.com", port: 443, path: "/", secure: true },
-];
-
-// Index du serveur actuel (géré par la classe PeerService)
-
 export interface ConnectionQuality {
-  latency: number; // ms
+  latency: number;
   status: "excellent" | "good" | "fair" | "poor" | "disconnected";
 }
 
+interface PeerConnection {
+  pc: RTCPeerConnection;
+  dc: RTCDataChannel | null;
+  username: string;
+}
+
 class PeerService {
-  private peer: Peer | null = null;
-  private connections: Map<string, DataConnection> = new Map();
+  private ws: WebSocket | null = null;
+  private myPeerId: string = "";
   private username: string = "";
+  private serverCode: string = "";
+  private isHost: boolean = false;
+  private hostId: string = "";
+
+  // WebRTC peer connections
+  private peerConnections: Map<string, PeerConnection> = new Map();
+  private pendingCandidates: Map<string, RTCIceCandidateInit[]> = new Map();
+
+  // Ping/latency tracking
   private pingTimestamps: Map<string, number> = new Map();
   private latencies: Map<string, number> = new Map();
   private pingInterval: ReturnType<typeof setInterval> | null = null;
 
   // Reconnection state
-  private isHost: boolean = false;
-  private serverCode: string = "";
   private reconnectAttempts: number = 0;
   private maxReconnectAttempts: number = 5;
   private reconnectDelay: number = 2000;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   private connectionTimeout: ReturnType<typeof setTimeout> | null = null;
   private intentionalDisconnect: boolean = false;
-  private currentServerIndex: number = 0;
   private isReconnecting: boolean = false;
 
   // Callbacks
@@ -110,31 +101,332 @@ class PeerService {
   }
 
   /**
-   * Get PeerJS config for current server
+   * Connecte au serveur WebSocket de signaling
    */
-  private getPeerConfig() {
-    const server = PEER_SERVERS[this.currentServerIndex];
-    return {
-      debug: 1,
-      host: server.host,
-      port: server.port,
-      path: server.path,
-      secure: server.secure,
-      config: {
-        iceServers: ICE_SERVERS,
-        iceCandidatePoolSize: 10,
+  private connectToSignaling(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        resolve();
+        return;
+      }
+
+      console.log(`[Signaling] Connexion à ${SIGNALING_SERVER}...`);
+      this.ws = new WebSocket(SIGNALING_SERVER);
+
+      const timeout = setTimeout(() => {
+        reject(new Error("Connection timeout"));
+        this.ws?.close();
+      }, 10000);
+
+      this.ws.onopen = () => {
+        clearTimeout(timeout);
+        console.log("[Signaling] Connecté au serveur");
+        resolve();
+      };
+
+      this.ws.onerror = (error) => {
+        clearTimeout(timeout);
+        console.error("[Signaling] Erreur:", error);
+        reject(new Error("Erreur de connexion au serveur de signaling"));
+      };
+
+      this.ws.onclose = () => {
+        console.log("[Signaling] Déconnecté");
+        if (!this.intentionalDisconnect) {
+          this.handleDisconnection();
+        }
+      };
+
+      this.ws.onmessage = (event) => {
+        this.handleSignalingMessage(JSON.parse(event.data));
+      };
+    });
+  }
+
+  /**
+   * Envoie un message au serveur de signaling
+   */
+  private sendToSignaling(data: Record<string, unknown>) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(data));
+    }
+  }
+
+  /**
+   * Gère les messages du serveur de signaling
+   */
+  private async handleSignalingMessage(msg: Record<string, unknown>) {
+    const type = msg.type as string;
+
+    switch (type) {
+      case "registered":
+        this.myPeerId = msg.peerId as string;
+        console.log("[Signaling] Enregistré avec ID:", this.myPeerId);
+        break;
+
+      case "hosted":
+        console.log("[Signaling] Room créée:", msg.room);
+        this.reconnectAttempts = 0;
+        this.isReconnecting = false;
+        this.onReady?.();
+        break;
+
+      case "joined": {
+        console.log("[Signaling] Rejoint la room:", msg.room);
+        this.hostId = msg.hostId as string;
+        const peers = msg.peers as Array<{ peerId: string; username: string; isHost: boolean }>;
+
+        // Créer des connexions WebRTC avec tous les peers existants
+        for (const peer of peers) {
+          await this.createPeerConnection(peer.peerId, peer.username, true);
+        }
+
+        this.reconnectAttempts = 0;
+        this.isReconnecting = false;
+        this.onReady?.();
+        break;
+      }
+
+      case "peer-joined": {
+        const peerId = msg.peerId as string;
+        const username = msg.username as string;
+        console.log("[Signaling] Nouveau peer:", peerId, username);
+        // Le nouveau peer va initier la connexion, on attend son offer
+        this.pendingCandidates.set(peerId, []);
+        break;
+      }
+
+      case "peer-left": {
+        const peerId = msg.peerId as string;
+        console.log("[Signaling] Peer parti:", peerId);
+        this.closePeerConnection(peerId);
+        this.onPeerDisconnected?.(peerId);
+        break;
+      }
+
+      case "signal": {
+        const fromPeer = msg.from as string;
+        const signalData = msg.data as Record<string, unknown>;
+        await this.handleSignalData(fromPeer, signalData);
+        break;
+      }
+
+      case "room-closed":
+        console.log("[Signaling] Room fermée:", msg.reason);
+        this.onError?.("Le serveur a été fermé par l'hôte.");
+        this.disconnect();
+        break;
+
+      case "error": {
+        const error = msg.error as string;
+        const message = msg.message as string;
+        console.error("[Signaling] Erreur:", error, message);
+
+        if (error === "room-exists") {
+          this.onError?.("Ce code serveur est déjà utilisé. Réessaie dans quelques minutes.");
+        } else if (error === "room-not-found") {
+          this.onError?.("Serveur introuvable. Vérifie que l'hôte est en ligne.");
+        } else {
+          this.onError?.(message);
+        }
+        break;
+      }
+    }
+  }
+
+  /**
+   * Gère les données de signaling WebRTC (offer/answer/ice)
+   */
+  private async handleSignalData(fromPeer: string, data: Record<string, unknown>) {
+    const signalType = data.type as string;
+
+    if (signalType === "offer") {
+      console.log("[WebRTC] Offer reçu de:", fromPeer);
+      const username = data.username as string || "Inconnu";
+      await this.handleOffer(fromPeer, username, data.sdp as string);
+    } else if (signalType === "answer") {
+      console.log("[WebRTC] Answer reçu de:", fromPeer);
+      await this.handleAnswer(fromPeer, data.sdp as string);
+    } else if (signalType === "ice-candidate") {
+      await this.handleIceCandidate(fromPeer, data.candidate as RTCIceCandidateInit);
+    }
+  }
+
+  /**
+   * Crée une connexion WebRTC avec un peer
+   */
+  private async createPeerConnection(peerId: string, username: string, initiator: boolean): Promise<void> {
+    console.log(`[WebRTC] Création connexion avec ${peerId} (initiator: ${initiator})`);
+
+    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const peerConn: PeerConnection = { pc, dc: null, username };
+    this.peerConnections.set(peerId, peerConn);
+    this.pendingCandidates.set(peerId, []);
+
+    // Gestion des ICE candidates
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        this.sendToSignaling({
+          type: "signal",
+          to: peerId,
+          data: {
+            type: "ice-candidate",
+            candidate: event.candidate.toJSON(),
+          },
+        });
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      console.log(`[WebRTC] ICE state avec ${peerId}:`, pc.iceConnectionState);
+      if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
+        this.closePeerConnection(peerId);
+        this.onPeerDisconnected?.(peerId);
+      }
+    };
+
+    // Si on est l'initiateur, créer le data channel
+    if (initiator) {
+      const dc = pc.createDataChannel("data", { ordered: true });
+      peerConn.dc = dc;
+      this.setupDataChannel(dc, peerId, username);
+
+      // Créer et envoyer l'offer
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      this.sendToSignaling({
+        type: "signal",
+        to: peerId,
+        data: {
+          type: "offer",
+          sdp: offer.sdp,
+          username: this.username,
+        },
+      });
+    } else {
+      // Sinon, attendre le data channel
+      pc.ondatachannel = (event) => {
+        peerConn.dc = event.channel;
+        this.setupDataChannel(event.channel, peerId, username);
+      };
+    }
+  }
+
+  /**
+   * Gère un offer WebRTC entrant
+   */
+  private async handleOffer(peerId: string, username: string, sdp: string) {
+    let peerConn = this.peerConnections.get(peerId);
+
+    if (!peerConn) {
+      await this.createPeerConnection(peerId, username, false);
+      peerConn = this.peerConnections.get(peerId)!;
+    }
+
+    const pc = peerConn.pc;
+    await pc.setRemoteDescription({ type: "offer", sdp });
+
+    // Appliquer les ICE candidates en attente
+    const pending = this.pendingCandidates.get(peerId) || [];
+    for (const candidate of pending) {
+      await pc.addIceCandidate(candidate);
+    }
+    this.pendingCandidates.set(peerId, []);
+
+    // Créer et envoyer l'answer
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+
+    this.sendToSignaling({
+      type: "signal",
+      to: peerId,
+      data: {
+        type: "answer",
+        sdp: answer.sdp,
       },
+    });
+  }
+
+  /**
+   * Gère un answer WebRTC entrant
+   */
+  private async handleAnswer(peerId: string, sdp: string) {
+    const peerConn = this.peerConnections.get(peerId);
+    if (!peerConn) return;
+
+    await peerConn.pc.setRemoteDescription({ type: "answer", sdp });
+
+    // Appliquer les ICE candidates en attente
+    const pending = this.pendingCandidates.get(peerId) || [];
+    for (const candidate of pending) {
+      await peerConn.pc.addIceCandidate(candidate);
+    }
+    this.pendingCandidates.set(peerId, []);
+  }
+
+  /**
+   * Gère un ICE candidate entrant
+   */
+  private async handleIceCandidate(peerId: string, candidate: RTCIceCandidateInit) {
+    const peerConn = this.peerConnections.get(peerId);
+
+    if (peerConn && peerConn.pc.remoteDescription) {
+      await peerConn.pc.addIceCandidate(candidate);
+    } else {
+      // Stocker pour plus tard
+      const pending = this.pendingCandidates.get(peerId) || [];
+      pending.push(candidate);
+      this.pendingCandidates.set(peerId, pending);
+    }
+  }
+
+  /**
+   * Configure le data channel
+   */
+  private setupDataChannel(dc: RTCDataChannel, peerId: string, username: string) {
+    dc.onopen = () => {
+      console.log(`[WebRTC] DataChannel ouvert avec ${peerId}`);
+      this.onPeerConnected?.(peerId, username);
+    };
+
+    dc.onclose = () => {
+      console.log(`[WebRTC] DataChannel fermé avec ${peerId}`);
+    };
+
+    dc.onmessage = (event) => {
+      const msg = JSON.parse(event.data) as PeerMessage;
+
+      if (msg.type === "ping") {
+        const payload = msg.payload as { timestamp: number };
+        this.sendTo(peerId, { type: "pong", payload: { timestamp: payload.timestamp } });
+      } else if (msg.type === "pong") {
+        const payload = msg.payload as { timestamp: number };
+        const sentTime = this.pingTimestamps.get(peerId);
+        if (sentTime && payload.timestamp === sentTime) {
+          const latency = Math.round((Date.now() - sentTime) / 2);
+          this.latencies.set(peerId, latency);
+          this.onLatencyUpdate?.(peerId, latency);
+        }
+      } else {
+        this.onMessage?.(peerId, msg);
+      }
     };
   }
 
   /**
-   * Try the next PeerJS server in the list
-   * @returns true if there are more servers to try, false if we've cycled through all
+   * Ferme une connexion peer
    */
-  private tryNextServer(): boolean {
-    this.currentServerIndex = (this.currentServerIndex + 1) % PEER_SERVERS.length;
-    console.log(`[PeerJS] Trying server: ${PEER_SERVERS[this.currentServerIndex].host}`);
-    return this.currentServerIndex !== 0;
+  private closePeerConnection(peerId: string) {
+    const peerConn = this.peerConnections.get(peerId);
+    if (peerConn) {
+      peerConn.dc?.close();
+      peerConn.pc.close();
+      this.peerConnections.delete(peerId);
+    }
+    this.pendingCandidates.delete(peerId);
+    this.latencies.delete(peerId);
+    this.pingTimestamps.delete(peerId);
   }
 
   /**
@@ -145,82 +437,54 @@ class PeerService {
     this.serverCode = serverCode;
     this.isHost = true;
     this.intentionalDisconnect = false;
-    // Only reset server index on fresh connection (not reconnection)
+
     if (!this.isReconnecting) {
-      this.currentServerIndex = 0;
       this.reconnectAttempts = 0;
     }
 
-    return new Promise((resolve, reject) => {
-      let resolved = false;
+    return new Promise(async (resolve, reject) => {
+      try {
+        await this.connectToSignaling();
 
-      const cleanup = () => {
-        if (this.connectionTimeout) {
-          clearTimeout(this.connectionTimeout);
-          this.connectionTimeout = null;
-        }
-      };
+        // S'enregistrer
+        this.sendToSignaling({
+          type: "register",
+          peerId: `host-${serverCode}`,
+          username,
+        });
 
-      // Clear any existing timeout before creating a new one
-      cleanup();
+        // Attendre l'enregistrement puis créer la room
+        await new Promise((r) => setTimeout(r, 100));
 
-      // Timeout si la connexion au serveur de signaling prend trop de temps (10 secondes)
-      this.connectionTimeout = setTimeout(() => {
-        if (!resolved && !this.intentionalDisconnect) {
-          resolved = true;
-          console.error("[PeerJS] Host connection timeout after 10s");
-          this.onError?.("Timeout de connexion au serveur de signaling.");
-          reject(new Error("Connection timeout"));
-        }
-      }, 10000);
+        this.sendToSignaling({
+          type: "host",
+          room: serverCode,
+        });
 
-      // Créer le peer avec le code serveur comme ID
-      const config = this.getPeerConfig();
-      console.log(`[PeerJS] Hosting: connecting to signaling server ${config.host}...`);
-      this.peer = new Peer(`hydrow-${serverCode}`, config);
+        // Le callback onReady sera appelé quand on reçoit "hosted"
+        const timeout = setTimeout(() => {
+          reject(new Error("Timeout"));
+        }, 10000);
 
-      this.peer.on("open", (id) => {
-        if (resolved) return;
-        resolved = true;
-        cleanup();
+        const originalOnReady = this.onReady;
+        this.onReady = () => {
+          clearTimeout(timeout);
+          this.onReady = originalOnReady;
+          originalOnReady?.();
+          resolve();
+        };
 
-        console.log("[PeerJS] Hosting as:", id);
-        // Connection successful - reset reconnection state
-        this.reconnectAttempts = 0;
-        this.isReconnecting = false;
-        this.currentServerIndex = 0;
-        this.onReady?.();
-        resolve();
-      });
-
-      this.peer.on("connection", (conn) => {
-        this.handleIncomingConnection(conn);
-      });
-
-      this.peer.on("error", (err) => {
-        if (resolved) return;
-        resolved = true;
-        cleanup();
-
-        console.error("[PeerJS] Host peer error:", err.type, err.message);
-        if (err.type === "unavailable-id") {
-          this.onError?.("Ce code serveur est déjà utilisé. Réessaie dans quelques minutes.");
-        } else if (err.type === "network") {
-          this.onError?.("Erreur réseau. Vérifie ta connexion internet.");
-        } else if (err.type === "server-error") {
-          this.onError?.("Le serveur de signaling ne répond pas. Réessaye dans quelques instants.");
-        } else {
-          this.onError?.(err.message);
-        }
+        const originalOnError = this.onError;
+        this.onError = (error) => {
+          clearTimeout(timeout);
+          this.onError = originalOnError;
+          originalOnError?.(error);
+          reject(new Error(error));
+        };
+      } catch (err) {
+        this.onError?.("Impossible de se connecter au serveur de signaling.");
         reject(err);
-      });
-
-      this.peer.on("disconnected", () => {
-        console.log("[PeerJS] Host disconnected from signaling server");
-        if (!resolved) {
-          this.handleDisconnection();
-        }
-      });
+      }
     });
   }
 
@@ -232,187 +496,97 @@ class PeerService {
     this.serverCode = serverCode;
     this.isHost = false;
     this.intentionalDisconnect = false;
-    // Only reset server index on fresh connection (not reconnection)
+
     if (!this.isReconnecting) {
-      this.currentServerIndex = 0;
       this.reconnectAttempts = 0;
     }
 
-    return new Promise((resolve, reject) => {
-      let resolved = false;
+    return new Promise(async (resolve, reject) => {
+      try {
+        await this.connectToSignaling();
 
-      const cleanup = () => {
-        if (this.connectionTimeout) {
-          clearTimeout(this.connectionTimeout);
-          this.connectionTimeout = null;
-        }
-      };
-
-      // Clear any existing timeout before creating a new one
-      cleanup();
-
-      // Timeout si la connexion prend trop de temps (15 secondes)
-      this.connectionTimeout = setTimeout(() => {
-        if (!resolved && !this.intentionalDisconnect) {
-          resolved = true;
-          console.error("[PeerJS] Connection timeout after 15s");
-          this.onError?.("Timeout de connexion. Le serveur ne répond pas.");
-          reject(new Error("Connection timeout"));
-        }
-      }, 15000);
-
-      // Créer un peer avec un ID aléatoire
-      const config = this.getPeerConfig();
-      console.log(`[PeerJS] Connecting to signaling server ${config.host}...`);
-      this.peer = new Peer(config);
-
-      this.peer.on("open", (id) => {
-        console.log("[PeerJS] Connected to signaling server, my peer ID:", id);
-
-        // Se connecter à l'hôte
-        const hostPeerId = `hydrow-${serverCode}`;
-        console.log("[PeerJS] Attempting to connect to host:", hostPeerId);
-
-        const conn = this.peer!.connect(hostPeerId, {
-          reliable: true,
-          metadata: { username },
+        // S'enregistrer avec un ID aléatoire
+        const randomId = Math.random().toString(36).substring(2, 10);
+        this.sendToSignaling({
+          type: "register",
+          peerId: `guest-${randomId}`,
+          username,
         });
 
-        conn.on("open", () => {
-          if (resolved) return;
-          resolved = true;
-          cleanup();
+        // Attendre l'enregistrement puis rejoindre
+        await new Promise((r) => setTimeout(r, 100));
 
-          console.log("[PeerJS] Connected to host!");
-          this.connections.set(hostPeerId, conn);
-          this.setupConnectionHandlers(conn, hostPeerId);
+        this.sendToSignaling({
+          type: "join",
+          room: serverCode,
+        });
 
-          // Annoncer notre présence
-          this.sendTo(hostPeerId, {
-            type: "announce",
-            payload: { username },
-          });
+        // Le callback onReady sera appelé quand on reçoit "joined"
+        const timeout = setTimeout(() => {
+          reject(new Error("Timeout"));
+        }, 15000);
 
-          // Connection successful - reset reconnection state
-          this.reconnectAttempts = 0;
-          this.isReconnecting = false;
-          this.currentServerIndex = 0;
-          this.onPeerConnected?.(hostPeerId, "Host");
-          this.onReady?.();
+        const originalOnReady = this.onReady;
+        this.onReady = () => {
+          clearTimeout(timeout);
+          this.onReady = originalOnReady;
+          originalOnReady?.();
           resolve();
-        });
+        };
 
-        conn.on("error", (err) => {
-          if (resolved) return;
-          resolved = true;
-          cleanup();
-
-          console.error("[PeerJS] Connection to host error:", err);
-          this.onError?.("Impossible de se connecter. Vérifie le code serveur.");
-          reject(err);
-        });
-      });
-
-      this.peer.on("error", (err) => {
-        if (resolved) return;
-        resolved = true;
-        cleanup();
-
-        console.error("[PeerJS] Peer error:", err.type, err.message);
-        if (err.type === "peer-unavailable") {
-          this.onError?.("Serveur introuvable. Vérifie que l'hôte est en ligne.");
-        } else if (err.type === "network") {
-          this.onError?.("Erreur réseau. Vérifie ta connexion internet.");
-        } else if (err.type === "server-error") {
-          this.onError?.("Le serveur de signaling ne répond pas. Réessaye dans quelques instants.");
-        } else {
-          this.onError?.(err.message);
-        }
+        const originalOnError = this.onError;
+        this.onError = (error) => {
+          clearTimeout(timeout);
+          this.onError = originalOnError;
+          originalOnError?.(error);
+          reject(new Error(error));
+        };
+      } catch (err) {
+        this.onError?.("Impossible de se connecter au serveur de signaling.");
         reject(err);
-      });
-
-      this.peer.on("disconnected", () => {
-        console.log("[PeerJS] Disconnected from signaling server");
-        if (!resolved) {
-          this.handleDisconnection();
-        }
-      });
-
-      // Gérer les connexions entrantes (pour mesh avec autres invités)
-      this.peer.on("connection", (conn) => {
-        this.handleIncomingConnection(conn);
-      });
-    });
-  }
-
-  private handleIncomingConnection(conn: DataConnection) {
-    const peerId = conn.peer;
-    const metadata = conn.metadata as { username?: string } | undefined;
-    const peerUsername = metadata?.username || "Inconnu";
-
-    console.log("Incoming connection from:", peerId, "username:", peerUsername);
-
-    conn.on("open", () => {
-      this.connections.set(peerId, conn);
-      this.setupConnectionHandlers(conn, peerId);
-      this.onPeerConnected?.(peerId, peerUsername);
+      }
     });
   }
 
   /**
-   * Handle unexpected disconnection and attempt reconnection
+   * Gère la déconnexion et tente une reconnexion
    */
   private handleDisconnection() {
     if (this.intentionalDisconnect) {
-      console.log("Intentional disconnect, not attempting reconnection");
       return;
     }
 
-    // Essayer le serveur suivant à chaque tentative
-    const hasMoreServers = this.tryNextServer();
-
-    if (this.reconnectAttempts >= this.maxReconnectAttempts * PEER_SERVERS.length) {
-      console.log("Max reconnection attempts reached on all servers");
-      this.onError?.("Connexion perdue. Impossible de se reconnecter après plusieurs tentatives sur tous les serveurs.");
-      // Reset server index for next time
-      this.currentServerIndex = 0;
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      console.log("Max reconnection attempts reached");
+      this.onError?.("Connexion perdue. Impossible de se reconnecter.");
       return;
     }
 
     this.reconnectAttempts++;
     this.isReconnecting = true;
-    const serverName = PEER_SERVERS[this.currentServerIndex].host;
-    console.log(`Attempting reconnection (${this.reconnectAttempts}) on server: ${serverName}`);
-    this.onReconnecting?.(this.reconnectAttempts, this.maxReconnectAttempts * PEER_SERVERS.length);
+    console.log(`Tentative de reconnexion (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+    this.onReconnecting?.(this.reconnectAttempts, this.maxReconnectAttempts);
 
-    // Délai plus court entre les serveurs, plus long si on a fait le tour
-    const delay = hasMoreServers ? 1000 : this.reconnectDelay * Math.pow(1.5, Math.floor(this.reconnectAttempts / PEER_SERVERS.length));
+    const delay = this.reconnectDelay * Math.pow(1.5, this.reconnectAttempts - 1);
 
     this.reconnectTimeout = setTimeout(async () => {
       try {
-        // Clean up old peer
-        if (this.peer && !this.peer.destroyed) {
-          this.peer.destroy();
-        }
-
-        // Attempt to reconnect
         if (this.isHost) {
           await this.host(this.serverCode, this.username);
         } else {
           await this.join(this.serverCode, this.username);
         }
-
-        console.log("Reconnection successful!");
+        console.log("Reconnexion réussie!");
         this.onReconnected?.();
       } catch (err) {
-        console.error("Reconnection failed:", err);
+        console.error("Échec de reconnexion:", err);
         this.handleDisconnection();
       }
     }, delay);
   }
 
   /**
-   * Cancel any pending reconnection attempts
+   * Annule les tentatives de reconnexion
    */
   private cancelReconnection() {
     if (this.reconnectTimeout) {
@@ -421,52 +595,15 @@ class PeerService {
     }
     this.reconnectAttempts = 0;
     this.isReconnecting = false;
-    this.currentServerIndex = 0;
-  }
-
-  private setupConnectionHandlers(conn: DataConnection, peerId: string) {
-    conn.on("data", (data) => {
-      const msg = data as PeerMessage;
-
-      if (msg.type === "announce") {
-        const payload = msg.payload as { username: string };
-        this.onPeerConnected?.(peerId, payload.username);
-      } else if (msg.type === "ping") {
-        // Respond immediately with pong
-        const payload = msg.payload as { timestamp: number };
-        this.sendTo(peerId, { type: "pong", payload: { timestamp: payload.timestamp } });
-      } else if (msg.type === "pong") {
-        // Calculate latency from round-trip time
-        const payload = msg.payload as { timestamp: number };
-        const sentTime = this.pingTimestamps.get(peerId);
-        if (sentTime && payload.timestamp === sentTime) {
-          const latency = Math.round((Date.now() - sentTime) / 2);
-          this.latencies.set(peerId, latency);
-          this.onLatencyUpdate?.(peerId, latency);
-        }
-      } else {
-        this.onMessage?.(peerId, msg);
-      }
-    });
-
-    conn.on("close", () => {
-      console.log("Connection closed:", peerId);
-      this.connections.delete(peerId);
-      this.onPeerDisconnected?.(peerId);
-    });
-
-    conn.on("error", (err) => {
-      console.error("Connection error with", peerId, ":", err);
-    });
   }
 
   /**
    * Envoyer un message à un peer spécifique
    */
   sendTo(peerId: string, message: PeerMessage) {
-    const conn = this.connections.get(peerId);
-    if (conn && conn.open) {
-      conn.send(message);
+    const peerConn = this.peerConnections.get(peerId);
+    if (peerConn?.dc?.readyState === "open") {
+      peerConn.dc.send(JSON.stringify(message));
     }
   }
 
@@ -474,9 +611,9 @@ class PeerService {
    * Envoyer un message à tous les peers
    */
   broadcast(message: PeerMessage) {
-    this.connections.forEach((conn) => {
-      if (conn.open) {
-        conn.send(message);
+    this.peerConnections.forEach((peerConn, peerId) => {
+      if (peerConn.dc?.readyState === "open") {
+        peerConn.dc.send(JSON.stringify(message));
       }
     });
   }
@@ -516,9 +653,8 @@ class PeerService {
 
     this.pingInterval = setInterval(() => {
       this.pingAllPeers();
-    }, 3000); // Ping every 3 seconds
+    }, 3000);
 
-    // Ping immediately
     this.pingAllPeers();
   }
 
@@ -537,8 +673,8 @@ class PeerService {
    */
   private pingAllPeers() {
     const timestamp = Date.now();
-    this.connections.forEach((conn, peerId) => {
-      if (conn.open) {
+    this.peerConnections.forEach((peerConn, peerId) => {
+      if (peerConn.dc?.readyState === "open") {
         this.pingTimestamps.set(peerId, timestamp);
         this.sendTo(peerId, { type: "ping", payload: { timestamp } });
       }
@@ -566,7 +702,7 @@ class PeerService {
    */
   getConnectionQuality(): ConnectionQuality {
     const latency = this.getAverageLatency();
-    if (latency === null || this.connections.size === 0) {
+    if (latency === null || this.peerConnections.size === 0) {
       return { latency: 0, status: "disconnected" };
     }
 
@@ -588,32 +724,30 @@ class PeerService {
    * Obtenir le nombre de peers connectés
    */
   getPeerCount(): number {
-    return this.connections.size;
+    return this.peerConnections.size;
   }
 
   /**
    * Obtenir la liste des peers
    */
   getPeers(): string[] {
-    return Array.from(this.connections.keys());
+    return Array.from(this.peerConnections.keys());
   }
 
   /**
    * Vérifier si connecté
    */
   isConnected(): boolean {
-    return this.peer !== null && !this.peer.destroyed;
+    return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
   }
 
   /**
    * Se déconnecter (intentionnellement)
    */
   disconnect() {
-    // Mark as intentional to prevent auto-reconnection and timeout errors
     this.intentionalDisconnect = true;
     this.cancelReconnection();
 
-    // Cancel any pending connection timeout
     if (this.connectionTimeout) {
       clearTimeout(this.connectionTimeout);
       this.connectionTimeout = null;
@@ -623,19 +757,24 @@ class PeerService {
     this.latencies.clear();
     this.pingTimestamps.clear();
 
-    this.connections.forEach((conn) => {
-      conn.close();
+    // Fermer toutes les connexions WebRTC
+    this.peerConnections.forEach((peerConn, peerId) => {
+      this.closePeerConnection(peerId);
     });
-    this.connections.clear();
+    this.peerConnections.clear();
+    this.pendingCandidates.clear();
 
-    if (this.peer) {
-      this.peer.destroy();
-      this.peer = null;
+    // Notifier le serveur et fermer la connexion
+    if (this.ws) {
+      this.sendToSignaling({ type: "leave" });
+      this.ws.close();
+      this.ws = null;
     }
 
-    // Reset state
     this.serverCode = "";
     this.isHost = false;
+    this.myPeerId = "";
+    this.hostId = "";
   }
 }
 
