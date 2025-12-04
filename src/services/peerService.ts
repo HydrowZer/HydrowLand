@@ -161,6 +161,9 @@ class PeerService {
         }
       };
 
+      // Clear any existing timeout before creating a new one
+      cleanup();
+
       // Timeout si la connexion au serveur de signaling prend trop de temps (10 secondes)
       this.connectionTimeout = setTimeout(() => {
         if (!resolved && !this.intentionalDisconnect) {
@@ -244,6 +247,9 @@ class PeerService {
           this.connectionTimeout = null;
         }
       };
+
+      // Clear any existing timeout before creating a new one
+      cleanup();
 
       // Timeout si la connexion prend trop de temps (15 secondes)
       this.connectionTimeout = setTimeout(() => {
