@@ -4,13 +4,22 @@ mod encoder;
 mod mixer;
 mod playback;
 mod realtime;
+mod streaming;
 
-pub use capture::AudioCapture;
-pub use denoise::{AudioDenoiser, SharedDenoiser};
 pub use encoder::{OpusDecoder, OpusEncoder};
+pub use realtime::RealtimeCapture;
+pub use streaming::{AudioStreamingService, AudioPacket};
+
+#[allow(dead_code)]
+pub use capture::AudioCapture;
+#[allow(dead_code, unused_imports)]
+pub use denoise::{AudioDenoiser, SharedDenoiser};
+#[allow(dead_code)]
 pub use mixer::AudioMixer;
+#[allow(dead_code)]
 pub use playback::AudioPlayback;
-pub use realtime::{AudioLevelEvent, RealtimeCapture};
+#[allow(dead_code, unused_imports)]
+pub use realtime::AudioLevelEvent;
 
 /// Sample rate for all audio operations (48kHz is Opus native)
 pub const SAMPLE_RATE: u32 = 48000;
@@ -24,6 +33,7 @@ pub const SAMPLES_PER_FRAME: usize = (SAMPLE_RATE * FRAME_DURATION_MS / 1000) as
 pub const OPUS_BITRATE: i32 = 64000;
 
 /// Encoded audio packet ready for transmission
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct EncodedAudioPacket {
     pub data: Vec<u8>,

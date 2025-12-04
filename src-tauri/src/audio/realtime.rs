@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Real-time audio capture with Tauri events
 //! Captures microphone input and emits audio level events to the frontend
 

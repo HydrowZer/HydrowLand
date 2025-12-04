@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Audio mesh commands for WebRTC audio streaming
 //! Provides Tauri commands for audio-enabled mesh networking
 

@@ -13,6 +13,7 @@ pub use commands::audio::AudioState;
 pub use commands::audio_mesh::AudioMeshState;
 pub use commands::screen::ScreenState;
 pub use commands::screen_stream::ScreenStreamState;
+pub use commands::streaming::StreamingState;
 pub use room::RoomState;
 pub use screen::ScreenCapture;
 pub use server::ServerState;
@@ -141,6 +142,7 @@ pub fn run() {
         .manage(AudioMeshState::default())
         .manage(ScreenState::default())
         .manage(ScreenStreamState::default())
+        .manage(StreamingState::default())
         .invoke_handler(tauri::generate_handler![
             greet,
             // Server commands
@@ -236,6 +238,30 @@ pub fn run() {
             commands::screen_stream::screen_stream_get_stats,
             commands::screen_stream::screen_stream_get_current_frame,
             commands::screen_stream::screen_stream_set_fps,
+            // Audio streaming commands (complete pipeline)
+            commands::streaming::streaming_init,
+            commands::streaming::streaming_start_capture,
+            commands::streaming::streaming_stop_capture,
+            commands::streaming::streaming_start_playback,
+            commands::streaming::streaming_stop_playback,
+            commands::streaming::streaming_set_muted,
+            commands::streaming::streaming_is_muted,
+            commands::streaming::streaming_is_capturing,
+            commands::streaming::streaming_is_playing,
+            commands::streaming::streaming_get_level,
+            commands::streaming::streaming_set_input_device,
+            commands::streaming::streaming_get_input_device,
+            commands::streaming::streaming_set_output_device,
+            commands::streaming::streaming_list_input_devices,
+            commands::streaming::streaming_list_output_devices,
+            commands::streaming::streaming_set_noise_suppression,
+            commands::streaming::streaming_is_noise_suppression_enabled,
+            commands::streaming::streaming_get_outgoing_packet,
+            commands::streaming::streaming_receive_audio,
+            commands::streaming::streaming_remove_peer,
+            commands::streaming::streaming_clear_peers,
+            commands::streaming::streaming_start_voice,
+            commands::streaming::streaming_stop_voice,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

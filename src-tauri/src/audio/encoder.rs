@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use opus::{Application, Channels, Decoder, Encoder};
 
 use super::{OPUS_BITRATE, SAMPLES_PER_FRAME, SAMPLE_RATE};

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! WebRTC video track for screen sharing
 
 use std::sync::Arc;
@@ -120,7 +122,7 @@ impl LocalVideoTrack {
 
     /// Build VP8 RTP payload descriptor + data
     /// See RFC 7741 for VP8 RTP payload format
-    fn build_vp8_payload(data: &[u8], is_start: bool, is_keyframe: bool) -> Vec<u8> {
+    fn build_vp8_payload(data: &[u8], is_start: bool, _is_keyframe: bool) -> Vec<u8> {
         // Simple VP8 payload descriptor (1 byte)
         // X: 0 (no extensions)
         // R: 0 (reserved)

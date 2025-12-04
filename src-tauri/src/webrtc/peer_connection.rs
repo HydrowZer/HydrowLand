@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use parking_lot::RwLock;
 use std::sync::Arc;
 use tokio::sync::mpsc;

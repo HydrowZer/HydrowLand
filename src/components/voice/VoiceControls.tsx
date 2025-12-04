@@ -131,13 +131,15 @@ export const VoiceControls = forwardRef<VoiceControlsRef, VoiceControlsProps>(
     try {
       const newMuted = !isMuted;
 
-      // Start voice capture if not already active
+      // Start voice capture if not already active (using old system for level meter)
       if (!isVoiceActive) {
         await api.audioStartVoice();
         setIsVoiceActive(true);
       }
 
+      // Use both old and new mute APIs
       await api.audioSetMute(newMuted);
+      await api.streamingSetMuted(newMuted);
       setIsMuted(newMuted);
 
       if (newMuted) {
@@ -165,6 +167,7 @@ export const VoiceControls = forwardRef<VoiceControlsRef, VoiceControlsProps>(
     try {
       // Pass null for first device (default), otherwise the device name
       await api.audioSetInputDevice(deviceName || null);
+      await api.streamingSetInputDevice(deviceName || null);
       console.log("Input device changed to:", deviceName || "default");
     } catch (e) {
       console.error("Failed to change input device:", e);
@@ -174,9 +177,12 @@ export const VoiceControls = forwardRef<VoiceControlsRef, VoiceControlsProps>(
   const handleOutputDeviceChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     const deviceName = e.target.value;
     setSelectedOutputDevice(deviceName);
-    // Note: Output device selection is not yet implemented in the backend
-    // This just updates the UI state for now
-    console.log("Output device selected:", deviceName);
+    try {
+      await api.streamingSetOutputDevice(deviceName || null);
+      console.log("Output device changed to:", deviceName || "default");
+    } catch (e) {
+      console.error("Failed to change output device:", e);
+    }
   };
 
   const handleNoiseSuppressionToggle = async () => {
@@ -184,6 +190,7 @@ export const VoiceControls = forwardRef<VoiceControlsRef, VoiceControlsProps>(
     setNoiseSuppressionEnabled(newState);
     try {
       await api.audioSetNoiseSuppression(newState);
+      await api.streamingSetNoiseSuppression(newState);
       console.log("Noise suppression:", newState ? "enabled" : "disabled");
     } catch (e) {
       console.error("Failed to toggle noise suppression:", e);

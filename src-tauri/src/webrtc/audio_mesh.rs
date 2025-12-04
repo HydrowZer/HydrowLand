@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Audio-enabled mesh manager extension
 //! Adds WebRTC audio track support to the existing mesh network
 
@@ -15,7 +17,9 @@ use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
 use webrtc::rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType};
 use webrtc::rtp_transceiver::rtp_transceiver_direction::RTCRtpTransceiverDirection;
+#[allow(unused_imports)]
 use webrtc::track::track_local::TrackLocal;
+#[allow(unused_imports)]
 use webrtc::track::track_remote::TrackRemote;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;

@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useServerStore } from "../../stores/serverStore";
 import * as api from "../../services/tauriApi";
+import type { EncodedFrameData } from "../../services/tauriApi";
 import { peerService } from "../../services/peerService";
 import { ChatPanel } from "../chat/ChatPanel";
 import { VoiceControls, type VoiceControlsRef } from "../voice/VoiceControls";
@@ -10,6 +11,7 @@ import { ConnectionIndicator } from "../ui/ConnectionIndicator";
 import { ThemeToggle } from "../ui/ThemeToggle";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
 import { useToast } from "../../hooks/useToast";
+import { RemoteScreenViewer } from "../screen/RemoteScreenViewer";
 
 interface ConnectedPeer {
   id: string;
@@ -26,6 +28,12 @@ interface SpeakingState {
   [odId: string]: boolean;
 }
 
+interface RemoteScreenShare {
+  peerId: string;
+  peerUsername: string;
+  frame: EncodedFrameData | null;
+}
+
 export function ServerView() {
   const { serverInfo, username, disconnect: storeDisconnect, addMessage } = useServerStore();
   const [isConnecting, setIsConnecting] = useState(true);
@@ -34,10 +42,183 @@ export function ServerView() {
   const [peers, setPeers] = useState<ConnectedPeer[]>([]);
   const [speakingStates, setSpeakingStates] = useState<SpeakingState>({});
   const [localSpeaking, setLocalSpeaking] = useState(false);
+  const [_audioStreamingEnabled, setAudioStreamingEnabled] = useState(false);
+  const [remoteScreenShare, setRemoteScreenShare] = useState<RemoteScreenShare | null>(null);
+  const [isLocalScreenSharing, setIsLocalScreenSharing] = useState(false);
   const voiceControlsRef = useRef<VoiceControlsRef>(null);
+  const audioLoopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const audioLoopRunningRef = useRef(false);
   const { toasts, toast, removeToast } = useToast();
 
   const isHost = serverInfo?.is_hosting ?? false;
+
+  // Handle receiving screen frames from peers
+  const handlePeerScreenFrame = useCallback((peerId: string, frameData: EncodedFrameData) => {
+    setRemoteScreenShare((prev) => {
+      if (!prev || prev.peerId !== peerId) return prev;
+      return { ...prev, frame: frameData };
+    });
+  }, []);
+
+  // Handle peer screen sharing state change
+  const handlePeerScreenState = useCallback((peerId: string, isSharing: boolean, peerUsername: string) => {
+    if (isSharing) {
+      setRemoteScreenShare({
+        peerId,
+        peerUsername,
+        frame: null,
+      });
+      toast.info(`${peerUsername} partage son écran`);
+    } else {
+      setRemoteScreenShare((prev) => {
+        if (prev?.peerId === peerId) {
+          toast.info(`${peerUsername} a arrêté le partage`);
+          return null;
+        }
+        return prev;
+      });
+    }
+  }, [toast]);
+
+  // Listen for local screen frames and broadcast to peers
+  useEffect(() => {
+    if (!isConnected) return;
+
+    let unlisten: (() => void) | undefined;
+    let lastFrameTime = 0;
+    const minFrameInterval = 33; // ~30fps max for network
+
+    const setupListener = async () => {
+      unlisten = await listen<EncodedFrameData>("screen-frame", (event) => {
+        const now = Date.now();
+        // Throttle to avoid overwhelming the network
+        if (now - lastFrameTime < minFrameInterval) return;
+        lastFrameTime = now;
+
+        // Track that we're sharing
+        if (!isLocalScreenSharing) {
+          setIsLocalScreenSharing(true);
+          // Notify peers we started sharing
+          peerService.broadcast({
+            type: "screen-state",
+            payload: { isSharing: true, username },
+          });
+        }
+
+        // Broadcast frame to all peers
+        peerService.broadcast({
+          type: "screen",
+          payload: event.payload,
+        });
+      });
+    };
+
+    setupListener();
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [isConnected, isLocalScreenSharing, username]);
+
+  // Notify peers when we stop sharing
+  useEffect(() => {
+    const checkSharingStatus = async () => {
+      try {
+        const isSharing = await api.screenIsSharing();
+        if (!isSharing && isLocalScreenSharing) {
+          setIsLocalScreenSharing(false);
+          peerService.broadcast({
+            type: "screen-state",
+            payload: { isSharing: false, username },
+          });
+        }
+      } catch {
+        // Ignore errors
+      }
+    };
+
+    const interval = setInterval(checkSharingStatus, 1000);
+    return () => clearInterval(interval);
+  }, [isLocalScreenSharing, username]);
+
+  // Handle receiving audio from peers
+  const handlePeerAudio = useCallback(async (peerId: string, audioData: number[]) => {
+    try {
+      await api.streamingReceiveAudio(peerId, audioData);
+    } catch (e) {
+      // Silently ignore errors during normal operation
+    }
+  }, []);
+
+  // Audio send loop - polls for encoded packets and sends them
+  const startAudioLoop = useCallback(() => {
+    if (audioLoopRunningRef.current) return;
+    audioLoopRunningRef.current = true;
+
+    const loop = async () => {
+      if (!audioLoopRunningRef.current) return;
+
+      try {
+        const packet = await api.streamingGetOutgoingPacket();
+        if (packet && packet.data.length > 0) {
+          peerService.broadcast({
+            type: "audio",
+            payload: {
+              data: packet.data,
+              timestamp: packet.timestamp,
+            },
+          });
+        }
+      } catch (e) {
+        // Ignore errors
+      }
+
+      // Schedule next iteration (~20ms for 50fps, matching Opus frame rate)
+      audioLoopRef.current = setTimeout(() => {
+        if (audioLoopRunningRef.current) {
+          loop();
+        }
+      }, 20);
+    };
+
+    loop();
+    console.log("[Audio] Streaming loop started");
+  }, []);
+
+  const stopAudioLoop = useCallback(() => {
+    audioLoopRunningRef.current = false;
+    if (audioLoopRef.current) {
+      clearTimeout(audioLoopRef.current);
+      audioLoopRef.current = null;
+    }
+    console.log("[Audio] Streaming loop stopped");
+  }, []);
+
+  // Initialize audio streaming when connected
+  useEffect(() => {
+    if (!isConnected) return;
+
+    const initAudio = async () => {
+      try {
+        await api.streamingStartVoice();
+        setAudioStreamingEnabled(true);
+        startAudioLoop();
+        console.log("[Audio] Streaming service initialized");
+      } catch (e) {
+        console.error("[Audio] Failed to initialize streaming:", e);
+      }
+    };
+
+    initAudio();
+
+    return () => {
+      stopAudioLoop();
+      api.streamingStopVoice().catch(console.error);
+      setAudioStreamingEnabled(false);
+    };
+  }, [isConnected, startAudioLoop, stopAudioLoop]);
 
   // Keyboard shortcuts
   useKeyboardShortcuts({
@@ -105,6 +286,10 @@ export function ServerView() {
         },
         onPeerDisconnected: (peerId) => {
           console.log("Peer disconnected:", peerId);
+          // Clean up audio for this peer
+          api.streamingRemovePeer(peerId).catch(console.error);
+          // Clean up screen share if this peer was sharing
+          setRemoteScreenShare((prev) => (prev?.peerId === peerId ? null : prev));
           // Find peer username before removing and show notification
           setPeers((prev) => {
             const disconnectedPeer = prev.find((p) => p.id === peerId);
@@ -135,6 +320,18 @@ export function ServerView() {
               ...prev,
               [peerId]: payload.is_speaking,
             }));
+          } else if (msg.type === "audio") {
+            // Handle incoming audio from peer
+            const payload = msg.payload as { data: number[]; timestamp: number };
+            handlePeerAudio(peerId, payload.data);
+          } else if (msg.type === "screen") {
+            // Handle incoming screen frame from peer
+            const payload = msg.payload as EncodedFrameData;
+            handlePeerScreenFrame(peerId, payload);
+          } else if (msg.type === "screen-state") {
+            // Handle peer screen sharing state change
+            const payload = msg.payload as { isSharing: boolean; username: string };
+            handlePeerScreenState(peerId, payload.isSharing, payload.username);
           }
         },
         onReconnecting: (attempt, maxAttempts) => {
@@ -165,7 +362,7 @@ export function ServerView() {
     return () => {
       peerService.disconnect();
     };
-  }, [serverInfo, username, isHost, addMessage]);
+  }, [serverInfo, username, isHost, addMessage, handlePeerAudio, handlePeerScreenFrame, handlePeerScreenState, toast]);
 
   const handleLeave = async () => {
     peerService.disconnect();
@@ -333,6 +530,15 @@ export function ServerView() {
         {/* Voice Controls - fixed at bottom */}
         <VoiceControls ref={voiceControlsRef} isConnected={isConnected} />
       </main>
+
+      {/* Remote Screen Share Viewer */}
+      {remoteScreenShare && (
+        <RemoteScreenViewer
+          peerUsername={remoteScreenShare.peerUsername}
+          frame={remoteScreenShare.frame}
+          onClose={() => setRemoteScreenShare(null)}
+        />
+      )}
     </div>
   );
 }

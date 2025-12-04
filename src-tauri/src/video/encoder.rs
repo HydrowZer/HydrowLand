@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Video frame encoding for screen sharing
 //!
 //! Uses JPEG encoding for simplicity and cross-platform compatibility.

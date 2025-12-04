@@ -4,5 +4,9 @@
 mod track;
 mod encoder;
 
+pub use encoder::{VideoEncoder, VideoFrame, EncoderConfig};
+
+#[allow(dead_code, unused_imports)]
 pub use track::{LocalVideoTrack, VP8_PAYLOAD_TYPE, VP8_CLOCK_RATE};
-pub use encoder::{VideoEncoder, VideoFrame, EncoderConfig, EncodedFrame};
+#[allow(dead_code, unused_imports)]
+pub use encoder::EncodedFrame;

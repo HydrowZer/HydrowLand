@@ -336,6 +336,82 @@ export const screenStreamGetCurrentFrame = (): Promise<EncodedFrameData | null> 
 export const screenStreamSetFps = (fps: number): Promise<void> =>
   invoke("screen_stream_set_fps", { fps });
 
+// ============ AUDIO STREAMING API (Complete Pipeline) ============
+
+export interface AudioPacket {
+  data: number[];
+  timestamp: number;
+}
+
+export const streamingInit = (): Promise<void> =>
+  invoke("streaming_init");
+
+export const streamingStartCapture = (): Promise<void> =>
+  invoke("streaming_start_capture");
+
+export const streamingStopCapture = (): Promise<void> =>
+  invoke("streaming_stop_capture");
+
+export const streamingStartPlayback = (): Promise<void> =>
+  invoke("streaming_start_playback");
+
+export const streamingStopPlayback = (): Promise<void> =>
+  invoke("streaming_stop_playback");
+
+export const streamingSetMuted = (muted: boolean): Promise<void> =>
+  invoke("streaming_set_muted", { muted });
+
+export const streamingIsMuted = (): Promise<boolean> =>
+  invoke("streaming_is_muted");
+
+export const streamingIsCapturing = (): Promise<boolean> =>
+  invoke("streaming_is_capturing");
+
+export const streamingIsPlaying = (): Promise<boolean> =>
+  invoke("streaming_is_playing");
+
+export const streamingGetLevel = (): Promise<number> =>
+  invoke("streaming_get_level");
+
+export const streamingSetInputDevice = (deviceName: string | null): Promise<void> =>
+  invoke("streaming_set_input_device", { deviceName });
+
+export const streamingGetInputDevice = (): Promise<string | null> =>
+  invoke("streaming_get_input_device");
+
+export const streamingSetOutputDevice = (deviceName: string | null): Promise<void> =>
+  invoke("streaming_set_output_device", { deviceName });
+
+export const streamingListInputDevices = (): Promise<string[]> =>
+  invoke("streaming_list_input_devices");
+
+export const streamingListOutputDevices = (): Promise<string[]> =>
+  invoke("streaming_list_output_devices");
+
+export const streamingSetNoiseSuppression = (enabled: boolean): Promise<void> =>
+  invoke("streaming_set_noise_suppression", { enabled });
+
+export const streamingIsNoiseSuppressionEnabled = (): Promise<boolean> =>
+  invoke("streaming_is_noise_suppression_enabled");
+
+export const streamingGetOutgoingPacket = (): Promise<AudioPacket | null> =>
+  invoke("streaming_get_outgoing_packet");
+
+export const streamingReceiveAudio = (peerId: string, opusData: number[]): Promise<void> =>
+  invoke("streaming_receive_audio", { peerId, opusData });
+
+export const streamingRemovePeer = (peerId: string): Promise<void> =>
+  invoke("streaming_remove_peer", { peerId });
+
+export const streamingClearPeers = (): Promise<void> =>
+  invoke("streaming_clear_peers");
+
+export const streamingStartVoice = (): Promise<void> =>
+  invoke("streaming_start_voice");
+
+export const streamingStopVoice = (): Promise<void> =>
+  invoke("streaming_stop_voice");
+
 // Test command
 export const greet = (name: string): Promise<string> =>
   invoke("greet", { name });

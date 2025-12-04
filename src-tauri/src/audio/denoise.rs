@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Noise reduction using nnnoiseless (RNNoise-based)
 //! Provides real-time noise suppression for voice audio
 

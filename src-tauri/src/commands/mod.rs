@@ -4,4 +4,5 @@ pub mod room;
 pub mod screen;
 pub mod screen_stream;
 pub mod server;
+pub mod streaming;
 pub mod webrtc;
