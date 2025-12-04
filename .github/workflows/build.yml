@@ -16,7 +16,7 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            args: --target universal-apple-darwin
+            args: "--target aarch64-apple-darwin"
           - platform: windows-latest
             args: ""
           - platform: ubuntu-22.04
@@ -36,7 +36,7 @@ jobs:
         if: matrix.platform == 'macos-latest'
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: aarch64-apple-darwin
 
       - name: Install Rust (other)
         if: matrix.platform != 'macos-latest'
