@@ -9,6 +9,41 @@ interface PeerMessage {
   payload: unknown;
 }
 
+// Configuration ICE avec serveurs STUN/TURN publics fiables
+const ICE_SERVERS: RTCIceServer[] = [
+  // Google STUN servers (très fiables)
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+  { urls: "stun:stun2.l.google.com:19302" },
+  // Cloudflare STUN
+  { urls: "stun:stun.cloudflare.com:3478" },
+  // OpenRelay TURN servers (gratuit, fiable)
+  {
+    urls: "turn:openrelay.metered.ca:80",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+  {
+    urls: "turn:openrelay.metered.ca:443",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+  {
+    urls: "turn:openrelay.metered.ca:443?transport=tcp",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+];
+
+// Configuration PeerJS commune
+const PEER_CONFIG = {
+  debug: 1,
+  config: {
+    iceServers: ICE_SERVERS,
+    iceCandidatePoolSize: 10,
+  },
+};
+
 export interface ConnectionQuality {
   latency: number; // ms
   status: "excellent" | "good" | "fair" | "poor" | "disconnected";
@@ -73,9 +108,7 @@ class PeerService {
 
     return new Promise((resolve, reject) => {
       // Créer le peer avec le code serveur comme ID
-      this.peer = new Peer(`hydrow-${serverCode}`, {
-        debug: 1,
-      });
+      this.peer = new Peer(`hydrow-${serverCode}`, PEER_CONFIG);
 
       this.peer.on("open", (id) => {
         console.log("Hosting as:", id);
@@ -117,9 +150,7 @@ class PeerService {
 
     return new Promise((resolve, reject) => {
       // Créer un peer avec un ID aléatoire
-      this.peer = new Peer({
-        debug: 1,
-      });
+      this.peer = new Peer(PEER_CONFIG);
 
       this.peer.on("open", (id) => {
         console.log("My peer ID:", id);
