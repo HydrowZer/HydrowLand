@@ -74,6 +74,7 @@ class PeerService {
   private maxReconnectAttempts: number = 5;
   private reconnectDelay: number = 2000;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+  private connectionTimeout: ReturnType<typeof setTimeout> | null = null;
   private intentionalDisconnect: boolean = false;
   private currentServerIndex: number = 0;
   private isReconnecting: boolean = false;
@@ -151,19 +152,18 @@ class PeerService {
     }
 
     return new Promise((resolve, reject) => {
-      let connectionTimeout: ReturnType<typeof setTimeout> | null = null;
       let resolved = false;
 
       const cleanup = () => {
-        if (connectionTimeout) {
-          clearTimeout(connectionTimeout);
-          connectionTimeout = null;
+        if (this.connectionTimeout) {
+          clearTimeout(this.connectionTimeout);
+          this.connectionTimeout = null;
         }
       };
 
       // Timeout si la connexion au serveur de signaling prend trop de temps (10 secondes)
-      connectionTimeout = setTimeout(() => {
-        if (!resolved) {
+      this.connectionTimeout = setTimeout(() => {
+        if (!resolved && !this.intentionalDisconnect) {
           resolved = true;
           console.error("[PeerJS] Host connection timeout after 10s");
           this.onError?.("Timeout de connexion au serveur de signaling.");
@@ -236,19 +236,18 @@ class PeerService {
     }
 
     return new Promise((resolve, reject) => {
-      let connectionTimeout: ReturnType<typeof setTimeout> | null = null;
       let resolved = false;
 
       const cleanup = () => {
-        if (connectionTimeout) {
-          clearTimeout(connectionTimeout);
-          connectionTimeout = null;
+        if (this.connectionTimeout) {
+          clearTimeout(this.connectionTimeout);
+          this.connectionTimeout = null;
         }
       };
 
       // Timeout si la connexion prend trop de temps (15 secondes)
-      connectionTimeout = setTimeout(() => {
-        if (!resolved) {
+      this.connectionTimeout = setTimeout(() => {
+        if (!resolved && !this.intentionalDisconnect) {
           resolved = true;
           console.error("[PeerJS] Connection timeout after 15s");
           this.onError?.("Timeout de connexion. Le serveur ne répond pas.");
@@ -604,9 +603,15 @@ class PeerService {
    * Se déconnecter (intentionnellement)
    */
   disconnect() {
-    // Mark as intentional to prevent auto-reconnection
+    // Mark as intentional to prevent auto-reconnection and timeout errors
     this.intentionalDisconnect = true;
     this.cancelReconnection();
+
+    // Cancel any pending connection timeout
+    if (this.connectionTimeout) {
+      clearTimeout(this.connectionTimeout);
+      this.connectionTimeout = null;
+    }
 
     this.stopPingInterval();
     this.latencies.clear();
