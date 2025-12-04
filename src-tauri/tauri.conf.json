@@ -46,7 +46,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ1Mzg1M0IwQTMwNTZEQTEKUldTaGJRV2pzRk00MVRtTEhZN2JyYTZoeGc4QnU3VnpPMnE2RGpSZnNaT3Z4NzFVWTV5b1daVWcK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc3NjJGNEI4NDEyMkE1MzAKUldRd3BTSkJ1UFJpZDd1WUpKRWdwaThIQ3FWQ1VPcHJaZmZ1USsrOTk3MkxJNWxST3BGWFgrbUgK",
       "endpoints": [
         "https://github.com/HydrowZer/HydrowLand/releases/latest/download/latest.json"
       ],
