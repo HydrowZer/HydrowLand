@@ -521,19 +521,18 @@ impl AudioStreamingService {
 
         // Decode the audio
         let samples = playback.decoder.decode(opus_data)?;
-        playback.samples_buffer.extend_from_slice(&samples);
 
         // Mix into playback buffer
-        // For now, just add samples directly (simple mixing)
         let mut output = self.playback_buffer.lock();
-        for sample in samples {
-            output.push(sample);
+
+        // If buffer is getting too large (>100ms), drop old samples to reduce latency
+        let max_buffer_samples = SAMPLES_PER_FRAME * 5; // ~100ms max latency
+        if output.len() > max_buffer_samples {
+            let to_remove = output.len() - max_buffer_samples / 2;
+            output.drain(0..to_remove);
         }
 
-        // Limit buffer size
-        while output.len() > SAMPLES_PER_FRAME * 20 {
-            output.remove(0);
-        }
+        output.extend(samples);
 
         Ok(())
     }
