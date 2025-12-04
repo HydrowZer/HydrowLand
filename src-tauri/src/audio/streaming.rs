@@ -44,6 +44,12 @@ struct PeerPlayback {
     last_activity: std::time::Instant,
 }
 
+/// Resampling state for playback
+struct ResampleState {
+    fractional_index: f64,
+    last_sample: f32,
+}
+
 /// Complete audio streaming manager
 pub struct AudioStreamingService {
     host: Host,
@@ -380,26 +386,51 @@ impl AudioStreamingService {
 
         let output_channels = config.channels as usize;
         let output_sample_rate = config.sample_rate.0;
+        let needs_resampling = output_sample_rate != SAMPLE_RATE;
+        let resample_ratio = output_sample_rate as f64 / SAMPLE_RATE as f64;
 
         tracing::info!(
-            "Playback config: {}Hz, {} channels",
+            "Playback config: {}Hz, {} channels, resample ratio: {}",
             output_sample_rate,
-            output_channels
+            output_channels,
+            resample_ratio
         );
 
         let playback_buffer = self.playback_buffer.clone();
+
+        // Resampling state - kept between callbacks
+        let resample_state: Arc<Mutex<ResampleState>> = Arc::new(Mutex::new(ResampleState {
+            fractional_index: 0.0,
+            last_sample: 0.0,
+        }));
 
         let stream = device.build_output_stream(
             &config,
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                 let mut buffer = playback_buffer.lock();
+                let mut rs = resample_state.lock();
 
-                // Number of frames needed (accounting for channels)
-                let frames_needed = data.len() / output_channels;
+                for frame in 0..(data.len() / output_channels) {
+                    let sample = if needs_resampling {
+                        // Resample from 48kHz to output rate
+                        rs.fractional_index += 1.0 / resample_ratio;
 
-                for frame in 0..frames_needed {
-                    // Get mono sample from buffer
-                    let sample = buffer.pop().unwrap_or(0.0);
+                        while rs.fractional_index >= 1.0 {
+                            rs.fractional_index -= 1.0;
+                            // Use remove(0) for FIFO instead of pop() which is LIFO
+                            if !buffer.is_empty() {
+                                rs.last_sample = buffer.remove(0);
+                            }
+                        }
+                        rs.last_sample
+                    } else {
+                        // No resampling needed - use FIFO order
+                        if !buffer.is_empty() {
+                            buffer.remove(0)
+                        } else {
+                            0.0
+                        }
+                    };
 
                     // Duplicate to all output channels
                     for ch in 0..output_channels {
