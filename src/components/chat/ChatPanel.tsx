@@ -1,26 +1,78 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback, memo } from "react";
 import { useServerStore } from "../../stores/serverStore";
 import { peerService } from "../../services/peerService";
+import type { Message } from "../../types/room";
 
 interface ChatPanelProps {
   isConnected: boolean;
 }
+
+// Memoized message component to prevent re-renders
+const ChatMessage = memo(function ChatMessage({
+  msg,
+  isLocal,
+}: {
+  msg: Message;
+  isLocal: boolean;
+}) {
+  const formatTime = (timestamp: number) => {
+    return new Date(timestamp).toLocaleTimeString("fr-FR", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+
+  return (
+    <div className={`flex ${isLocal ? "justify-end" : "justify-start"}`}>
+      <div
+        className={`max-w-[70%] rounded-lg px-4 py-2 ${
+          isLocal ? "bg-primary-600 text-white" : "bg-dark-700 text-white"
+        }`}
+      >
+        {!isLocal && (
+          <p className="text-xs text-primary-300 font-medium mb-1">
+            {msg.senderName}
+          </p>
+        )}
+        <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
+        <p className="text-xs opacity-60 text-right mt-1">
+          {formatTime(msg.timestamp)}
+        </p>
+      </div>
+    </div>
+  );
+});
 
 export function ChatPanel({ isConnected }: ChatPanelProps) {
   const { username, messages, addMessage } = useServerStore();
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const shouldAutoScroll = useRef(true);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
+  // Check if user is near bottom before adding new message
+  const handleScroll = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (container) {
+      const { scrollTop, scrollHeight, clientHeight } = container;
+      // Auto-scroll if within 100px of bottom
+      shouldAutoScroll.current = scrollHeight - scrollTop - clientHeight < 100;
+    }
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    if (shouldAutoScroll.current && messagesEndRef.current) {
+      // Use 'auto' instead of 'smooth' for better performance
+      messagesEndRef.current.scrollIntoView({ behavior: "auto" });
+    }
+  }, []);
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages.length, scrollToBottom]);
 
-  const handleSend = () => {
+  const handleSend = useCallback(() => {
     if (!input.trim() || !isConnected || sending) return;
 
     const content = input.trim();
@@ -45,26 +97,26 @@ export function ChatPanel({ isConnected }: ChatPanelProps) {
     } finally {
       setSending(false);
     }
-  };
+  }, [input, isConnected, sending, addMessage, username]);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  };
-
-  const formatTime = (timestamp: number) => {
-    return new Date(timestamp).toLocaleTimeString("fr-FR", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        handleSend();
+      }
+    },
+    [handleSend]
+  );
 
   return (
-    <div className="flex-1 flex flex-col">
+    <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
       {/* Messages area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+      <div
+        ref={messagesContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0"
+      >
         {messages.length === 0 ? (
           <div className="flex items-center justify-center h-full text-dark-500">
             <p className="text-center">
@@ -75,39 +127,18 @@ export function ChatPanel({ isConnected }: ChatPanelProps) {
           </div>
         ) : (
           messages.map((msg) => (
-            <div
+            <ChatMessage
               key={msg.id}
-              className={`flex ${
-                msg.senderId === "local" ? "justify-end" : "justify-start"
-              }`}
-            >
-              <div
-                className={`max-w-[70%] rounded-lg px-4 py-2 ${
-                  msg.senderId === "local"
-                    ? "bg-primary-600 text-white"
-                    : "bg-dark-700 text-white"
-                }`}
-              >
-                {msg.senderId !== "local" && (
-                  <p className="text-xs text-primary-300 font-medium mb-1">
-                    {msg.senderName}
-                  </p>
-                )}
-                <p className="text-sm whitespace-pre-wrap break-words">
-                  {msg.content}
-                </p>
-                <p className="text-xs opacity-60 text-right mt-1">
-                  {formatTime(msg.timestamp)}
-                </p>
-              </div>
-            </div>
+              msg={msg}
+              isLocal={msg.senderId === "local"}
+            />
           ))
         )}
         <div ref={messagesEndRef} />
       </div>
 
       {/* Input area */}
-      <div className="border-t border-dark-700 p-4">
+      <div className="flex-shrink-0 border-t border-dark-700 p-4">
         <div className="flex gap-2">
           <input
             type="text"

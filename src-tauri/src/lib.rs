@@ -2,13 +2,17 @@
 mod audio;
 mod commands;
 mod room;
+mod screen;
 mod server;
 mod webrtc;
 
 pub use commands::audio::AudioState;
+pub use commands::audio_mesh::AudioMeshState;
+pub use commands::screen::ScreenState;
 pub use room::RoomState;
+pub use screen::ScreenCapture;
 pub use server::ServerState;
-pub use webrtc::{MeshManager, WebRTCManager};
+pub use webrtc::{AudioMeshManager, MeshManager, WebRTCManager};
 
 /// Commande de test pour vérifier l'IPC
 #[tauri::command]
@@ -27,6 +31,8 @@ pub fn run() {
         .manage(WebRTCManager::new())
         .manage(MeshManager::new())
         .manage(AudioState::default())
+        .manage(AudioMeshState::default())
+        .manage(ScreenState::default())
         .invoke_handler(tauri::generate_handler![
             greet,
             // Server commands
@@ -61,13 +67,14 @@ pub fn run() {
             commands::webrtc::mesh_remove_peer,
             commands::webrtc::mesh_close_all,
             commands::webrtc::mesh_announce_peer,
-            // Audio commands
+            // Audio commands (local processing)
             commands::audio::audio_init,
             commands::audio::audio_start_voice,
             commands::audio::audio_stop_voice,
             commands::audio::audio_set_mute,
             commands::audio::audio_is_muted,
             commands::audio::audio_is_voice_active,
+            commands::audio::audio_get_level,
             commands::audio::audio_list_input_devices,
             commands::audio::audio_list_output_devices,
             commands::audio::audio_encode,
@@ -78,6 +85,42 @@ pub fn run() {
             commands::audio::audio_set_master_volume,
             commands::audio::audio_get_master_volume,
             commands::audio::audio_cleanup,
+            commands::audio::audio_set_input_device,
+            commands::audio::audio_get_input_device,
+            commands::audio::audio_set_noise_suppression,
+            commands::audio::audio_is_noise_suppression_enabled,
+            // Audio mesh commands (WebRTC audio streaming)
+            commands::audio_mesh::audio_mesh_init,
+            commands::audio_mesh::audio_mesh_enable_audio,
+            commands::audio_mesh::audio_mesh_is_audio_enabled,
+            commands::audio_mesh::audio_mesh_create_offer,
+            commands::audio_mesh::audio_mesh_accept_offer,
+            commands::audio_mesh::audio_mesh_accept_answer,
+            commands::audio_mesh::audio_mesh_broadcast_audio,
+            commands::audio_mesh::audio_mesh_send_audio_to_peer,
+            commands::audio_mesh::audio_mesh_send_chat,
+            commands::audio_mesh::audio_mesh_get_peers,
+            commands::audio_mesh::audio_mesh_peer_count,
+            commands::audio_mesh::audio_mesh_is_connected,
+            commands::audio_mesh::audio_mesh_remove_peer,
+            commands::audio_mesh::audio_mesh_close_all,
+            commands::audio_mesh::audio_mesh_calculate_level,
+            commands::audio_mesh::audio_mesh_is_speaking,
+            // Screen capture commands
+            commands::screen::screen_list_monitors,
+            commands::screen::screen_list_windows,
+            commands::screen::screen_list_sources,
+            commands::screen::screen_select_monitor,
+            commands::screen::screen_select_window,
+            commands::screen::screen_clear_selection,
+            commands::screen::screen_get_selection,
+            commands::screen::screen_check_permission,
+            commands::screen::screen_request_permission,
+            commands::screen::screen_capture_preview,
+            commands::screen::screen_start_sharing,
+            commands::screen::screen_stop_sharing,
+            commands::screen::screen_is_sharing,
+            commands::screen::screen_capture_frame,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

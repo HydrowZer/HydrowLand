@@ -5,7 +5,7 @@ export type ConnectionHandler = (peerId: string, username: string) => void;
 export type DisconnectionHandler = (peerId: string) => void;
 
 interface PeerMessage {
-  type: "chat" | "audio" | "announce" | "ping";
+  type: "chat" | "audio" | "announce" | "ping" | "speaking";
   payload: unknown;
 }
 

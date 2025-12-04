@@ -1,21 +1,18 @@
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tauri::State;
+use tauri::{AppHandle, State};
 
-use crate::audio::{AudioCapture, AudioMixer, AudioPlayback, OpusDecoder, OpusEncoder};
+use crate::audio::{AudioCapture, AudioMixer, AudioPlayback, OpusDecoder, OpusEncoder, RealtimeCapture};
 
 /// Thread-safe audio state wrapper
-/// Note: Encoder/Decoder are created on-demand as they are not Sync
 pub struct AudioState {
     mixer: Mutex<AudioMixer>,
+    realtime: RealtimeCapture,
     is_voice_active: Mutex<bool>,
-    is_muted: Mutex<bool>,
     master_volume: Mutex<f32>,
 }
 
-// Safety: AudioState only contains Mutex-protected data
-// The encoder/decoder are created on demand per call
+// Safety: AudioState only contains Mutex-protected data and thread-safe RealtimeCapture
 unsafe impl Send for AudioState {}
 unsafe impl Sync for AudioState {}
 
@@ -23,8 +20,8 @@ impl AudioState {
     pub fn new() -> Self {
         Self {
             mixer: Mutex::new(AudioMixer::new()),
+            realtime: RealtimeCapture::new(),
             is_voice_active: Mutex::new(false),
-            is_muted: Mutex::new(false),
             master_volume: Mutex::new(1.0),
         }
     }
@@ -49,44 +46,58 @@ pub fn audio_init(_audio: State<'_, AudioState>) -> Result<(), String> {
     Ok(())
 }
 
-/// Start voice capture (returns immediately, audio processing happens in background)
+/// Start voice capture with real-time level monitoring
+/// This starts capturing from the microphone and emits "audio-level" events
 #[tauri::command]
-pub fn audio_start_voice(audio: State<'_, AudioState>) -> Result<(), String> {
+pub fn audio_start_voice(
+    audio: State<'_, AudioState>,
+    app_handle: AppHandle,
+) -> Result<(), String> {
     let mut active = audio.is_voice_active.lock();
     if *active {
         return Ok(()); // Already active
     }
 
+    // Start real-time capture
+    audio.realtime.start(app_handle)?;
+
     *active = true;
-    tracing::info!("Voice activated");
+    tracing::info!("Voice capture started");
     Ok(())
 }
 
 /// Stop voice capture
 #[tauri::command]
 pub fn audio_stop_voice(audio: State<'_, AudioState>) -> Result<(), String> {
+    audio.realtime.stop();
     *audio.is_voice_active.lock() = false;
-    tracing::info!("Voice deactivated");
+    tracing::info!("Voice capture stopped");
     Ok(())
 }
 
 /// Set mute state
 #[tauri::command]
 pub fn audio_set_mute(audio: State<'_, AudioState>, muted: bool) {
-    *audio.is_muted.lock() = muted;
+    audio.realtime.set_muted(muted);
     tracing::info!("Mute set to: {}", muted);
 }
 
 /// Get mute state
 #[tauri::command]
 pub fn audio_is_muted(audio: State<'_, AudioState>) -> bool {
-    *audio.is_muted.lock()
+    audio.realtime.is_muted()
 }
 
 /// Check if voice is active
 #[tauri::command]
 pub fn audio_is_voice_active(audio: State<'_, AudioState>) -> bool {
     *audio.is_voice_active.lock()
+}
+
+/// Get current audio level (0.0 - 1.0)
+#[tauri::command]
+pub fn audio_get_level(audio: State<'_, AudioState>) -> f32 {
+    audio.realtime.current_level()
 }
 
 /// List available input devices (microphones)
@@ -152,7 +163,36 @@ pub fn audio_get_master_volume(audio: State<'_, AudioState>) -> f32 {
 /// Clean up audio resources
 #[tauri::command]
 pub fn audio_cleanup(audio: State<'_, AudioState>) {
+    audio.realtime.stop();
     *audio.is_voice_active.lock() = false;
     audio.mixer.lock().clear();
     tracing::info!("Audio cleaned up");
+}
+
+/// Set input device by name. Pass null/None for default device.
+#[tauri::command]
+pub fn audio_set_input_device(
+    audio: State<'_, AudioState>,
+    device_name: Option<String>,
+) -> Result<(), String> {
+    tracing::info!("Setting input device to: {:?}", device_name);
+    audio.realtime.set_input_device(device_name)
+}
+
+/// Get currently selected input device name (None if using default)
+#[tauri::command]
+pub fn audio_get_input_device(audio: State<'_, AudioState>) -> Option<String> {
+    audio.realtime.get_selected_device()
+}
+
+/// Enable or disable noise suppression
+#[tauri::command]
+pub fn audio_set_noise_suppression(audio: State<'_, AudioState>, enabled: bool) {
+    audio.realtime.set_noise_suppression(enabled);
+}
+
+/// Check if noise suppression is enabled
+#[tauri::command]
+pub fn audio_is_noise_suppression_enabled(audio: State<'_, AudioState>) -> bool {
+    audio.realtime.is_noise_suppression_enabled()
 }

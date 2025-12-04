@@ -53,10 +53,17 @@ export const useServerStore = create<ServerState>()(
       serverInfo: null,
       setServerInfo: (serverInfo) => set({ serverInfo }),
 
-      // Messages
+      // Messages (limited to last 200 to prevent performance issues)
       messages: [],
       addMessage: (message) =>
-        set((state) => ({ messages: [...state.messages, message] })),
+        set((state) => {
+          const newMessages = [...state.messages, message];
+          // Keep only the last 200 messages
+          if (newMessages.length > 200) {
+            return { messages: newMessages.slice(-200) };
+          }
+          return { messages: newMessages };
+        }),
       clearMessages: () => set({ messages: [] }),
 
       // Connected peers

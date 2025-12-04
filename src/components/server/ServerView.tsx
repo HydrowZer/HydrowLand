@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { useServerStore } from "../../stores/serverStore";
 import * as api from "../../services/tauriApi";
 import { peerService } from "../../services/peerService";
@@ -10,14 +11,56 @@ interface ConnectedPeer {
   username: string;
 }
 
+interface AudioLevelEvent {
+  level: number;
+  is_speaking: boolean;
+  rms: number;
+}
+
+interface SpeakingState {
+  [odId: string]: boolean;
+}
+
 export function ServerView() {
   const { serverInfo, username, disconnect: storeDisconnect, addMessage } = useServerStore();
   const [isConnecting, setIsConnecting] = useState(true);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [peers, setPeers] = useState<ConnectedPeer[]>([]);
+  const [speakingStates, setSpeakingStates] = useState<SpeakingState>({});
+  const [localSpeaking, setLocalSpeaking] = useState(false);
 
   const isHost = serverInfo?.is_hosting ?? false;
+
+  // Listen for local audio level to detect when we're speaking
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let lastSpeakingState = false;
+
+    const setupListener = async () => {
+      unlisten = await listen<AudioLevelEvent>("audio-level", (event) => {
+        const isSpeaking = event.payload.is_speaking;
+        setLocalSpeaking(isSpeaking);
+
+        // Broadcast speaking state to peers (only when state changes)
+        if (isSpeaking !== lastSpeakingState) {
+          lastSpeakingState = isSpeaking;
+          peerService.broadcast({
+            type: "speaking",
+            payload: { is_speaking: isSpeaking },
+          });
+        }
+      });
+    };
+
+    setupListener();
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, []);
 
   // Connexion automatique au montage
   useEffect(() => {
@@ -64,6 +107,12 @@ export function ServerView() {
               content: payload.content,
               timestamp: payload.timestamp,
             });
+          } else if (msg.type === "speaking") {
+            const payload = msg.payload as { is_speaking: boolean };
+            setSpeakingStates((prev) => ({
+              ...prev,
+              [peerId]: payload.is_speaking,
+            }));
           }
         },
       });
@@ -105,7 +154,7 @@ export function ServerView() {
   if (!serverInfo) return null;
 
   return (
-    <div className="min-h-screen bg-dark-900 flex flex-col">
+    <div className="h-screen bg-dark-900 flex flex-col overflow-hidden">
       {/* Header */}
       <header className="bg-dark-800 border-b border-dark-700 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-4">
@@ -163,9 +212,9 @@ export function ServerView() {
       )}
 
       {/* Main content */}
-      <div className="flex-1 flex">
+      <div className="flex-1 flex min-h-0">
         {/* Sidebar - Peers */}
-        <aside className="w-64 bg-dark-800 border-r border-dark-700 p-4">
+        <aside className="w-64 bg-dark-800 border-r border-dark-700 p-4 overflow-y-auto">
           <h2 className="text-sm font-semibold text-dark-400 uppercase tracking-wider mb-4">
             Connectés ({peers.length + 1})
           </h2>
@@ -173,8 +222,16 @@ export function ServerView() {
           <ul className="space-y-2">
             {/* Moi */}
             <li className="flex items-center gap-3 p-2 rounded-lg bg-dark-700/50">
-              <div className="w-8 h-8 rounded-full bg-primary-600 flex items-center justify-center text-white font-medium text-sm">
-                {username.charAt(0).toUpperCase()}
+              <div className="relative">
+                {/* Speaking indicator ring */}
+                {localSpeaking && (
+                  <div className="absolute -inset-1 rounded-full bg-green-500/30 animate-pulse" />
+                )}
+                <div className={`relative w-8 h-8 rounded-full bg-primary-600 flex items-center justify-center text-white font-medium text-sm ${
+                  localSpeaking ? "ring-2 ring-green-400 ring-offset-1 ring-offset-dark-700" : ""
+                }`}>
+                  {username.charAt(0).toUpperCase()}
+                </div>
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-white text-sm font-medium truncate">
@@ -188,22 +245,33 @@ export function ServerView() {
             </li>
 
             {/* Autres peers */}
-            {peers.map((peer) => (
-              <li
-                key={peer.id}
-                className="flex items-center gap-3 p-2 rounded-lg bg-dark-700/50"
-              >
-                <div className="w-8 h-8 rounded-full bg-green-600 flex items-center justify-center text-white font-medium text-sm">
-                  {peer.username.charAt(0).toUpperCase()}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-white text-sm font-medium truncate">
-                    {peer.username}
-                  </p>
-                  <p className="text-dark-500 text-xs">Membre</p>
-                </div>
-              </li>
-            ))}
+            {peers.map((peer) => {
+              const isSpeaking = speakingStates[peer.id] ?? false;
+              return (
+                <li
+                  key={peer.id}
+                  className="flex items-center gap-3 p-2 rounded-lg bg-dark-700/50"
+                >
+                  <div className="relative">
+                    {/* Speaking indicator ring */}
+                    {isSpeaking && (
+                      <div className="absolute -inset-1 rounded-full bg-green-500/30 animate-pulse" />
+                    )}
+                    <div className={`relative w-8 h-8 rounded-full bg-green-600 flex items-center justify-center text-white font-medium text-sm ${
+                      isSpeaking ? "ring-2 ring-green-400 ring-offset-1 ring-offset-dark-700" : ""
+                    }`}>
+                      {peer.username.charAt(0).toUpperCase()}
+                    </div>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-white text-sm font-medium truncate">
+                      {peer.username}
+                    </p>
+                    <p className="text-dark-500 text-xs">Membre</p>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
 
           {isHost && isConnected && peers.length === 0 && (
@@ -216,7 +284,7 @@ export function ServerView() {
         </aside>
 
         {/* Main area - Chat */}
-        <main className="flex-1 flex flex-col">
+        <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
           <ChatPanel isConnected={isConnected} />
           <VoiceControls isConnected={isConnected} />
         </main>

@@ -1,5 +1,15 @@
 import { useState, useEffect } from "react";
+import { listen } from "@tauri-apps/api/event";
 import * as api from "../../services/tauriApi";
+import { AudioLevelMeter } from "./AudioLevelMeter";
+import { ScreenShareButton } from "../screen/ScreenShareButton";
+import type { CaptureSourceInfo } from "../../services/tauriApi";
+
+interface AudioLevelEvent {
+  level: number;
+  is_speaking: boolean;
+  rms: number;
+}
 
 interface VoiceControlsProps {
   isConnected: boolean;
@@ -8,11 +18,19 @@ interface VoiceControlsProps {
 export function VoiceControls({ isConnected }: VoiceControlsProps) {
   const [isMuted, setIsMuted] = useState(true);
   const [isVoiceActive, setIsVoiceActive] = useState(false);
+  const [audioLevel, setAudioLevel] = useState(0);
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const [masterVolume, setMasterVolume] = useState(100);
   const [showVolumeSlider, setShowVolumeSlider] = useState(false);
   const [inputDevices, setInputDevices] = useState<string[]>([]);
   const [outputDevices, setOutputDevices] = useState<string[]>([]);
   const [showDevices, setShowDevices] = useState(false);
+  const [selectedInputDevice, setSelectedInputDevice] = useState<string>("");
+  const [selectedOutputDevice, setSelectedOutputDevice] = useState<string>("");
+  const [noiseSuppressionEnabled, setNoiseSuppressionEnabled] = useState(true);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+  // Note: screenShareSource will be used in Phase 8 for WebRTC video track
+  const [_screenShareSource, setScreenShareSource] = useState<CaptureSourceInfo | null>(null);
 
   // Initialize audio on mount
   useEffect(() => {
@@ -34,16 +52,49 @@ export function VoiceControls({ isConnected }: VoiceControlsProps) {
     };
   }, []);
 
-  // Load audio devices
+  // Listen for audio level events from the backend
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+
+    const setupListener = async () => {
+      unlisten = await listen<AudioLevelEvent>("audio-level", (event) => {
+        setAudioLevel(event.payload.level);
+        setIsSpeaking(event.payload.is_speaking);
+      });
+    };
+
+    setupListener();
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, []);
+
+  // Load audio devices and get currently selected device
   useEffect(() => {
     const loadDevices = async () => {
       try {
-        const [inputs, outputs] = await Promise.all([
+        const [inputs, outputs, currentInput, noiseSuppressionState] = await Promise.all([
           api.audioListInputDevices(),
           api.audioListOutputDevices(),
+          api.audioGetInputDevice(),
+          api.audioIsNoiseSuppressionEnabled(),
         ]);
         setInputDevices(inputs);
         setOutputDevices(outputs);
+        setNoiseSuppressionEnabled(noiseSuppressionState);
+        // Set selected input device (empty string means default)
+        if (currentInput && inputs.includes(currentInput)) {
+          setSelectedInputDevice(currentInput);
+        } else if (inputs.length > 0) {
+          setSelectedInputDevice(inputs[0]);
+        }
+        // For output, just select the first one as default for now
+        if (outputs.length > 0) {
+          setSelectedOutputDevice(outputs[0]);
+        }
       } catch (e) {
         console.error("Failed to load audio devices:", e);
       }
@@ -54,12 +105,19 @@ export function VoiceControls({ isConnected }: VoiceControlsProps) {
   const toggleMute = async () => {
     try {
       const newMuted = !isMuted;
+
+      // Start voice capture if not already active
+      if (!isVoiceActive) {
+        await api.audioStartVoice();
+        setIsVoiceActive(true);
+      }
+
       await api.audioSetMute(newMuted);
       setIsMuted(newMuted);
 
-      if (!newMuted && !isVoiceActive) {
-        await api.audioStartVoice();
-        setIsVoiceActive(true);
+      if (newMuted) {
+        setAudioLevel(0);
+        setIsSpeaking(false);
       }
     } catch (e) {
       console.error("Failed to toggle mute:", e);
@@ -76,14 +134,58 @@ export function VoiceControls({ isConnected }: VoiceControlsProps) {
     }
   };
 
+  const handleInputDeviceChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const deviceName = e.target.value;
+    setSelectedInputDevice(deviceName);
+    try {
+      // Pass null for first device (default), otherwise the device name
+      await api.audioSetInputDevice(deviceName || null);
+      console.log("Input device changed to:", deviceName || "default");
+    } catch (e) {
+      console.error("Failed to change input device:", e);
+    }
+  };
+
+  const handleOutputDeviceChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const deviceName = e.target.value;
+    setSelectedOutputDevice(deviceName);
+    // Note: Output device selection is not yet implemented in the backend
+    // This just updates the UI state for now
+    console.log("Output device selected:", deviceName);
+  };
+
+  const handleNoiseSuppressionToggle = async () => {
+    const newState = !noiseSuppressionEnabled;
+    setNoiseSuppressionEnabled(newState);
+    try {
+      await api.audioSetNoiseSuppression(newState);
+      console.log("Noise suppression:", newState ? "enabled" : "disabled");
+    } catch (e) {
+      console.error("Failed to toggle noise suppression:", e);
+      // Revert on error
+      setNoiseSuppressionEnabled(!newState);
+    }
+  };
+
   return (
     <div className="bg-dark-800 border-t border-dark-700 p-4 flex items-center justify-center gap-4">
+      {/* Audio Level Meter */}
+      <div className="flex items-center gap-2">
+        <AudioLevelMeter
+          sourceId="local"
+          level={audioLevel}
+          isSpeaking={isSpeaking}
+          size="md"
+          orientation="horizontal"
+        />
+      </div>
+
       {/* Mute/Unmute Button */}
       <div className="relative">
         <button
           onClick={toggleMute}
           disabled={!isConnected}
-          className={`p-3 rounded-full transition ${
+          className={`p-3 rounded-full transition relative ${
             !isConnected
               ? "bg-dark-700 text-dark-500 cursor-not-allowed"
               : isMuted
@@ -92,9 +194,14 @@ export function VoiceControls({ isConnected }: VoiceControlsProps) {
           }`}
           title={isMuted ? "Activer le micro" : "Couper le micro"}
         >
+          {/* Speaking indicator ring */}
+          {!isMuted && isSpeaking && (
+            <span className="absolute inset-0 rounded-full animate-ping bg-green-400 opacity-30" />
+          )}
+
           {isMuted ? (
             // Muted icon (with slash)
-            <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+            <svg className="w-6 h-6 relative z-10" fill="currentColor" viewBox="0 0 24 24">
               <path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z" />
               <line
                 x1="3"
@@ -107,7 +214,7 @@ export function VoiceControls({ isConnected }: VoiceControlsProps) {
             </svg>
           ) : (
             // Unmuted icon
-            <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+            <svg className="w-6 h-6 relative z-10" fill="currentColor" viewBox="0 0 24 24">
               <path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z" />
             </svg>
           )}
@@ -196,7 +303,11 @@ export function VoiceControls({ isConnected }: VoiceControlsProps) {
                 Microphone
               </h4>
               {inputDevices.length > 0 ? (
-                <select className="w-full bg-dark-600 text-white text-sm rounded px-2 py-1 border border-dark-500">
+                <select
+                  className="w-full bg-dark-600 text-white text-sm rounded px-2 py-1 border border-dark-500"
+                  value={selectedInputDevice}
+                  onChange={handleInputDeviceChange}
+                >
                   {inputDevices.map((device, i) => (
                     <option key={i} value={device}>
                       {device}
@@ -213,7 +324,11 @@ export function VoiceControls({ isConnected }: VoiceControlsProps) {
                 Sortie audio
               </h4>
               {outputDevices.length > 0 ? (
-                <select className="w-full bg-dark-600 text-white text-sm rounded px-2 py-1 border border-dark-500">
+                <select
+                  className="w-full bg-dark-600 text-white text-sm rounded px-2 py-1 border border-dark-500"
+                  value={selectedOutputDevice}
+                  onChange={handleOutputDeviceChange}
+                >
                   {outputDevices.map((device, i) => (
                     <option key={i} value={device}>
                       {device}
@@ -226,30 +341,44 @@ export function VoiceControls({ isConnected }: VoiceControlsProps) {
                 </p>
               )}
             </div>
+
+            {/* Noise Suppression Toggle */}
+            <div className="mt-3 pt-3 border-t border-dark-600">
+              <label className="flex items-center justify-between cursor-pointer">
+                <span className="text-xs font-semibold text-dark-400 uppercase">
+                  Reduction du bruit
+                </span>
+                <button
+                  onClick={handleNoiseSuppressionToggle}
+                  className={`relative w-10 h-5 rounded-full transition-colors ${
+                    noiseSuppressionEnabled ? "bg-primary-500" : "bg-dark-500"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                      noiseSuppressionEnabled ? "translate-x-5" : "translate-x-0"
+                    }`}
+                  />
+                </button>
+              </label>
+            </div>
           </div>
         )}
       </div>
 
-      {/* Screen Share Placeholder */}
-      <button
-        className="p-3 rounded-full bg-dark-700 text-dark-500 cursor-not-allowed"
-        disabled
-        title="Partage d'ecran - bientot disponible"
-      >
-        <svg
-          className="w-6 h-6"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-          />
-        </svg>
-      </button>
+      {/* Screen Share Button */}
+      <ScreenShareButton
+        isSharing={isScreenSharing}
+        onSharingChange={(sharing, source) => {
+          setIsScreenSharing(sharing);
+          setScreenShareSource(source || null);
+          if (sharing && source) {
+            console.log("Started sharing:", source.type === "Monitor" ? `Monitor ${source.id}` : source.title);
+          } else {
+            console.log("Stopped sharing");
+          }
+        }}
+      />
 
       {/* Connection Status */}
       {!isConnected && (

@@ -1,12 +1,16 @@
 mod capture;
+mod denoise;
 mod encoder;
 mod mixer;
 mod playback;
+mod realtime;
 
 pub use capture::AudioCapture;
+pub use denoise::{AudioDenoiser, SharedDenoiser};
 pub use encoder::{OpusDecoder, OpusEncoder};
 pub use mixer::AudioMixer;
 pub use playback::AudioPlayback;
+pub use realtime::{AudioLevelEvent, RealtimeCapture};
 
 /// Sample rate for all audio operations (48kHz is Opus native)
 pub const SAMPLE_RATE: u32 = 48000;
