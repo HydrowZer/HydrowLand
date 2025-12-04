@@ -50,7 +50,6 @@ class PeerService {
   private username: string = "";
   private serverCode: string = "";
   private isHost: boolean = false;
-  private hostId: string = "";
 
   // WebRTC peer connections
   private peerConnections: Map<string, PeerConnection> = new Map();
@@ -173,7 +172,6 @@ class PeerService {
 
       case "joined": {
         console.log("[Signaling] Rejoint la room:", msg.room);
-        this.hostId = msg.hostId as string;
         const peers = msg.peers as Array<{ peerId: string; username: string; isHost: boolean }>;
 
         // Créer des connexions WebRTC avec tous les peers existants
@@ -611,7 +609,7 @@ class PeerService {
    * Envoyer un message à tous les peers
    */
   broadcast(message: PeerMessage) {
-    this.peerConnections.forEach((peerConn, peerId) => {
+    this.peerConnections.forEach((peerConn) => {
       if (peerConn.dc?.readyState === "open") {
         peerConn.dc.send(JSON.stringify(message));
       }
@@ -758,7 +756,7 @@ class PeerService {
     this.pingTimestamps.clear();
 
     // Fermer toutes les connexions WebRTC
-    this.peerConnections.forEach((peerConn, peerId) => {
+    this.peerConnections.forEach((_, peerId) => {
       this.closePeerConnection(peerId);
     });
     this.peerConnections.clear();
@@ -774,7 +772,6 @@ class PeerService {
     this.serverCode = "";
     this.isHost = false;
     this.myPeerId = "";
-    this.hostId = "";
   }
 }
 
