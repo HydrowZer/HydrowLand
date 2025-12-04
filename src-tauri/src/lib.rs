@@ -4,11 +4,13 @@ mod commands;
 mod room;
 mod screen;
 mod server;
+mod video;
 mod webrtc;
 
 pub use commands::audio::AudioState;
 pub use commands::audio_mesh::AudioMeshState;
 pub use commands::screen::ScreenState;
+pub use commands::screen_stream::ScreenStreamState;
 pub use room::RoomState;
 pub use screen::ScreenCapture;
 pub use server::ServerState;
@@ -33,6 +35,7 @@ pub fn run() {
         .manage(AudioState::default())
         .manage(AudioMeshState::default())
         .manage(ScreenState::default())
+        .manage(ScreenStreamState::default())
         .invoke_handler(tauri::generate_handler![
             greet,
             // Server commands
@@ -121,6 +124,13 @@ pub fn run() {
             commands::screen::screen_stop_sharing,
             commands::screen::screen_is_sharing,
             commands::screen::screen_capture_frame,
+            // Screen streaming commands
+            commands::screen_stream::screen_stream_start,
+            commands::screen_stream::screen_stream_stop,
+            commands::screen_stream::screen_stream_is_active,
+            commands::screen_stream::screen_stream_get_stats,
+            commands::screen_stream::screen_stream_get_current_frame,
+            commands::screen_stream::screen_stream_set_fps,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

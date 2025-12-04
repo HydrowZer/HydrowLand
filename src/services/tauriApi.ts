@@ -299,6 +299,43 @@ export const screenIsSharing = (): Promise<boolean> =>
 export const screenCaptureFrame = (): Promise<string> =>
   invoke("screen_capture_frame");
 
+// ============ SCREEN STREAMING API ============
+
+export interface EncodedFrameData {
+  data: string; // Base64 encoded JPEG
+  width: number;
+  height: number;
+  is_keyframe: boolean;
+  frame_number: number;
+  timestamp: number;
+}
+
+export interface StreamStats {
+  is_streaming: boolean;
+  fps: number;
+  frames_sent: number;
+  total_bytes: number;
+  avg_frame_size: number;
+}
+
+export const screenStreamStart = (fps?: number): Promise<void> =>
+  invoke("screen_stream_start", { fps });
+
+export const screenStreamStop = (): Promise<void> =>
+  invoke("screen_stream_stop");
+
+export const screenStreamIsActive = (): Promise<boolean> =>
+  invoke("screen_stream_is_active");
+
+export const screenStreamGetStats = (): Promise<StreamStats> =>
+  invoke("screen_stream_get_stats");
+
+export const screenStreamGetCurrentFrame = (): Promise<EncodedFrameData | null> =>
+  invoke("screen_stream_get_current_frame");
+
+export const screenStreamSetFps = (fps: number): Promise<void> =>
+  invoke("screen_stream_set_fps", { fps });
+
 // Test command
 export const greet = (name: string): Promise<string> =>
   invoke("greet", { name });

@@ -4,21 +4,31 @@ import {
   screenStartSharing,
   screenStopSharing,
   screenClearSelection,
+  screenStreamStart,
+  screenStreamStop,
   type CaptureSourceInfo,
 } from "../../services/tauriApi";
+import {
+  openScreenViewerWindow,
+  closeScreenViewerWindow,
+} from "../../services/screenViewerWindow";
 
 interface ScreenShareButtonProps {
   isSharing: boolean;
   onSharingChange: (sharing: boolean, source?: CaptureSourceInfo) => void;
+  /** Target FPS for streaming (default: 30) */
+  fps?: number;
 }
 
-export function ScreenShareButton({ isSharing, onSharingChange }: ScreenShareButtonProps) {
+export function ScreenShareButton({ isSharing, onSharingChange, fps = 30 }: ScreenShareButtonProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const handleClick = async () => {
     if (isSharing) {
-      // Stop sharing
+      // Stop sharing and streaming
       try {
+        await closeScreenViewerWindow();
+        await screenStreamStop();
         await screenStopSharing();
         await screenClearSelection();
         onSharingChange(false);
@@ -33,10 +43,23 @@ export function ScreenShareButton({ isSharing, onSharingChange }: ScreenShareBut
 
   const handleSourceSelect = async (source: CaptureSourceInfo) => {
     try {
+      // Start the internal sharing state
       await screenStartSharing();
+      // Start the actual video stream
+      await screenStreamStart(fps);
+      // Open the viewer window
+      await openScreenViewerWindow();
       onSharingChange(true, source);
     } catch (err) {
       console.error("Failed to start sharing:", err);
+      // Cleanup on error
+      try {
+        await closeScreenViewerWindow();
+        await screenStopSharing();
+        await screenClearSelection();
+      } catch {
+        // Ignore cleanup errors
+      }
     }
   };
 

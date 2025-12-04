@@ -285,7 +285,12 @@ export function ServerView() {
 
         {/* Main area - Chat */}
         <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
-          <ChatPanel isConnected={isConnected} />
+          {/* Chat Panel */}
+          <div className="flex-1">
+            <ChatPanel isConnected={isConnected} />
+          </div>
+
+          {/* Voice Controls */}
           <VoiceControls isConnected={isConnected} />
         </main>
       </div>

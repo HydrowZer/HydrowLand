@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Default capabilities for HydrowLand","local":true,"windows":["main"],"permissions":["core:default","shell:allow-open"]}}
+{"default":{"identifier":"default","description":"Default capabilities for HydrowLand","local":true,"windows":["main","screen-viewer"],"permissions":["core:default","core:window:default","core:window:allow-create","core:window:allow-close","core:webview:default","core:webview:allow-create-webview-window","shell:allow-open"]}}

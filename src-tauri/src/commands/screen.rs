@@ -20,6 +20,11 @@ impl ScreenState {
             capture: Arc::new(RwLock::new(ScreenCapture::new())),
         }
     }
+
+    /// Get access to the inner ScreenCapture
+    pub fn capture(&self) -> &Arc<RwLock<ScreenCapture>> {
+        &self.capture
+    }
 }
 
 /// List all available monitors
