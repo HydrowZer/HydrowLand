@@ -22,7 +22,6 @@ jobs:
       - name: Create auto tag
         id: tag
         run: |
-          # Générer un tag basé sur la date et le numéro de build
           TAG="v0.1.0-build.${{ github.run_number }}"
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
@@ -41,7 +40,7 @@ jobs:
             args: "--target aarch64-apple-darwin"
           - platform: windows-latest
             args: ""
-          - platform: ubuntu-22.04
+          - platform: ubuntu-24.04
             args: ""
 
     runs-on: ${{ matrix.platform }}
@@ -70,7 +69,7 @@ jobs:
           brew install opus
 
       - name: Install dependencies (Ubuntu)
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'ubuntu-24.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopus-dev libpipewire-0.3-dev

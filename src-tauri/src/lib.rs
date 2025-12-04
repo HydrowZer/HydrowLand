@@ -1,3 +1,5 @@
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::{Emitter, Manager};
 
 mod audio;
 mod commands;
@@ -31,6 +33,106 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
+        .setup(|app| {
+            // Create menu
+            let check_update = MenuItem::with_id(app, "check_update", "Rechercher les mises à jour...", true, None::<&str>)?;
+            let quit = PredefinedMenuItem::quit(app, Some("Quitter"))?;
+            let separator = PredefinedMenuItem::separator(app)?;
+
+            #[cfg(target_os = "macos")]
+            {
+                let app_menu = Submenu::with_items(
+                    app,
+                    "HydrowLand",
+                    true,
+                    &[
+                        &PredefinedMenuItem::about(app, Some("À propos de HydrowLand"), None)?,
+                        &separator,
+                        &check_update,
+                        &PredefinedMenuItem::separator(app)?,
+                        &PredefinedMenuItem::services(app, None)?,
+                        &PredefinedMenuItem::separator(app)?,
+                        &PredefinedMenuItem::hide(app, Some("Masquer HydrowLand"))?,
+                        &PredefinedMenuItem::hide_others(app, Some("Masquer les autres"))?,
+                        &PredefinedMenuItem::show_all(app, Some("Tout afficher"))?,
+                        &PredefinedMenuItem::separator(app)?,
+                        &quit,
+                    ],
+                )?;
+
+                let edit_menu = Submenu::with_items(
+                    app,
+                    "Édition",
+                    true,
+                    &[
+                        &PredefinedMenuItem::undo(app, Some("Annuler"))?,
+                        &PredefinedMenuItem::redo(app, Some("Rétablir"))?,
+                        &PredefinedMenuItem::separator(app)?,
+                        &PredefinedMenuItem::cut(app, Some("Couper"))?,
+                        &PredefinedMenuItem::copy(app, Some("Copier"))?,
+                        &PredefinedMenuItem::paste(app, Some("Coller"))?,
+                        &PredefinedMenuItem::select_all(app, Some("Tout sélectionner"))?,
+                    ],
+                )?;
+
+                let window_menu = Submenu::with_items(
+                    app,
+                    "Fenêtre",
+                    true,
+                    &[
+                        &PredefinedMenuItem::minimize(app, Some("Réduire"))?,
+                        &PredefinedMenuItem::maximize(app, Some("Agrandir"))?,
+                        &PredefinedMenuItem::separator(app)?,
+                        &PredefinedMenuItem::close_window(app, Some("Fermer"))?,
+                    ],
+                )?;
+
+                let menu = Menu::with_items(app, &[&app_menu, &edit_menu, &window_menu])?;
+                app.set_menu(menu)?;
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                let file_menu = Submenu::with_items(
+                    app,
+                    "Fichier",
+                    true,
+                    &[
+                        &check_update,
+                        &separator,
+                        &quit,
+                    ],
+                )?;
+
+                let edit_menu = Submenu::with_items(
+                    app,
+                    "Édition",
+                    true,
+                    &[
+                        &PredefinedMenuItem::undo(app, Some("Annuler"))?,
+                        &PredefinedMenuItem::redo(app, Some("Rétablir"))?,
+                        &PredefinedMenuItem::separator(app)?,
+                        &PredefinedMenuItem::cut(app, Some("Couper"))?,
+                        &PredefinedMenuItem::copy(app, Some("Copier"))?,
+                        &PredefinedMenuItem::paste(app, Some("Coller"))?,
+                        &PredefinedMenuItem::select_all(app, Some("Tout sélectionner"))?,
+                    ],
+                )?;
+
+                let menu = Menu::with_items(app, &[&file_menu, &edit_menu])?;
+                app.set_menu(menu)?;
+            }
+
+            Ok(())
+        })
+        .on_menu_event(|app, event| {
+            if event.id() == "check_update" {
+                // Emit event to frontend to trigger update check
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.emit("check-for-updates", ());
+                }
+            }
+        })
         .manage(RoomState::default())
         .manage(ServerState::new())
         .manage(WebRTCManager::new())

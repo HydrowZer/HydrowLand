@@ -1,90 +1,26 @@
-import { useState, useEffect, useCallback } from "react";
-import { check, Update } from "@tauri-apps/plugin-updater";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { useState, useEffect } from "react";
+import { updateService, type UpdateState } from "../../services/updateService";
 import { relaunch } from "@tauri-apps/plugin-process";
 
-type UpdateStatus = "idle" | "checking" | "available" | "downloading" | "ready" | "error";
-
 export function UpdateChecker() {
-  const [status, setStatus] = useState<UpdateStatus>("idle");
-  const [progress, setProgress] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [update, setUpdate] = useState<Update | null>(null);
-  const [showBanner, setShowBanner] = useState(false);
+  const [state, setState] = useState<UpdateState>(updateService.getState());
 
-  const checkForUpdates = useCallback(async () => {
-    try {
-      setStatus("checking");
-      setError(null);
-
-      const updateInfo = await check();
-
-      if (updateInfo) {
-        setUpdate(updateInfo);
-        setStatus("available");
-        setShowBanner(true);
-      } else {
-        setStatus("idle");
-      }
-    } catch (err) {
-      console.error("Update check failed:", err);
-      setError(String(err));
-      setStatus("error");
-    }
-  }, []);
-
-  const downloadAndInstall = useCallback(async () => {
-    if (!update) return;
-
-    try {
-      setStatus("downloading");
-      setProgress(0);
-
-      await update.downloadAndInstall((event) => {
-        switch (event.event) {
-          case "Started":
-            console.log("Download started, total:", event.data.contentLength);
-            break;
-          case "Progress":
-            const percent = Math.round(
-              ((event.data.chunkLength || 0) / (update.currentVersion.length || 1)) * 100
-            );
-            setProgress(Math.min(percent, 100));
-            break;
-          case "Finished":
-            console.log("Download finished");
-            break;
-        }
-      });
-
-      setStatus("ready");
-
-      const shouldRelaunch = await ask(
-        "La mise à jour a été installée. Voulez-vous redémarrer l'application maintenant ?",
-        {
-          title: "Mise à jour prête",
-          kind: "info",
-        }
-      );
-
-      if (shouldRelaunch) {
-        await relaunch();
-      }
-    } catch (err) {
-      console.error("Update download failed:", err);
-      setError(String(err));
-      setStatus("error");
-    }
-  }, [update]);
-
-  // Check for updates on startup (with a small delay)
   useEffect(() => {
+    // Subscribe to update service
+    const unsubscribe = updateService.subscribe(setState);
+
+    // Check for updates on startup (with a small delay)
     const timer = setTimeout(() => {
-      checkForUpdates();
+      updateService.checkForUpdates(false);
     }, 3000);
 
-    return () => clearTimeout(timer);
-  }, [checkForUpdates]);
+    return () => {
+      unsubscribe();
+      clearTimeout(timer);
+    };
+  }, []);
+
+  const { status, progress, error, update, showBanner } = state;
 
   // Don't show anything if no update or hidden
   if (!showBanner || status === "idle" || status === "checking") {
@@ -109,7 +45,7 @@ export function UpdateChecker() {
                 </p>
               </div>
               <button
-                onClick={() => setShowBanner(false)}
+                onClick={() => updateService.hideBanner()}
                 className="text-dark-500 hover:text-dark-300 transition"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -119,13 +55,13 @@ export function UpdateChecker() {
             </div>
             <div className="flex gap-2 mt-3">
               <button
-                onClick={() => setShowBanner(false)}
+                onClick={() => updateService.hideBanner()}
                 className="flex-1 px-3 py-1.5 text-xs text-dark-400 hover:text-white bg-dark-700 hover:bg-dark-600 rounded-lg transition"
               >
                 Plus tard
               </button>
               <button
-                onClick={downloadAndInstall}
+                onClick={() => updateService.downloadAndInstall()}
                 className="flex-1 px-3 py-1.5 text-xs text-white bg-accent-600 hover:bg-accent-500 rounded-lg transition"
               >
                 Mettre à jour
@@ -186,7 +122,7 @@ export function UpdateChecker() {
               <p className="text-xs text-dark-400 mt-0.5 truncate">{error}</p>
             </div>
             <button
-              onClick={() => setShowBanner(false)}
+              onClick={() => updateService.hideBanner()}
               className="text-dark-500 hover:text-dark-300 transition"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
